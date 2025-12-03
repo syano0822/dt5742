@@ -133,7 +133,7 @@ void convert2root(const char* inPattern = "wave_%d.dat",
       std::snprintf(gname_raw, sizeof(gname_raw), "ch%02d_raw", ch);
       char gtitle_raw[128];
       std::snprintf(gtitle_raw, sizeof(gtitle_raw),
-		    "Event %d Channel %d (raw);time [ns];value", evt, ch);
+		    "Event %d Channel %d (raw);time [ns];ADC", evt, ch);
       g_raw->SetName(gname_raw);
       g_raw->SetTitle(gtitle_raw);
       g_raw->Write();
@@ -155,7 +155,7 @@ void convert2root(const char* inPattern = "wave_%d.dat",
       std::snprintf(gname_ped, sizeof(gname_ped), "ch%02d_ped", ch);
       char gtitle_ped[128];
       std::snprintf(gtitle_ped, sizeof(gtitle_ped),
-		    "Event %d Channel %d (ped->%.1f);time [ns];value", evt, ch, PED_TARGET);
+		    "Event %d Channel %d (ped->%.1f);time [ns];ADC", evt, ch, PED_TARGET);
       g_ped->SetName(gname_ped);
       g_ped->SetTitle(gtitle_ped);
       g_ped->Write();

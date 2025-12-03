@@ -38,10 +38,29 @@ Color_t  colors[16] = {
     kBlue-7        // 15（群青）
 };
 
-void draw_event_waveforms(const char* filename="wf.root",
+float min_disp_adc = 1200.;
+float max_disp_adc = 4000.;
+
+float min_disp_time = 150;
+float max_disp_time = 175;
+
+void draw_event_waveforms(const char* filename="wave_form.root",
 			  int event=0, bool usePed=true)
 {
-    TFile* fin=TFile::Open(filename,"READ");
+
+  gStyle->SetOptStat(0);
+  gStyle->SetOptTitle(0);
+  gStyle->SetTitleBorderSize(0);
+  gStyle->SetStatBorderSize(0);
+  gStyle->SetLegendBorderSize(0);
+
+  gStyle->SetPadLeftMargin(0.15);
+  gStyle->SetPadRightMargin(0.05);
+  gStyle->SetPadTopMargin(0.05);
+  gStyle->SetPadBottomMargin(0.07);
+
+  
+  TFile* fin=TFile::Open(filename,"READ");
     if(!fin||fin->IsZombie()){ std::cerr<<"File open error\n"; return; }
 
     char dname[64];
@@ -50,47 +69,77 @@ void draw_event_waveforms(const char* filename="wf.root",
     if(!evtDir){ std::cerr<<"No directory "<<dname<<"\n"; return; }
 
     TString tag = usePed? "ped":"raw";
-
-    //========================================================
-    //  Canvas ① → 2x8 view
-    //========================================================
+    
     TCanvas* c1 = new TCanvas(Form("evt%d_view",event),
                               Form("Event %d (%s) 2x8 view",event,tag.Data()),
-                              1600,700);
-    c1->Divide(8,2);
+                              3200,1400);
+    c1->Divide(8,2,0.002,0.005);
 
-    // 上段 Ch0–7
     for(int ch=0; ch<8; ch++){
         c1->cd(ch+1);
         TGraph* g=(TGraph*)evtDir->Get(Form("ch%02d_%s",ch,tag.Data()));
 	g->SetLineColor(kRed+1);	
-	g->SetMinimum(1500);	
-	g->SetMaximum(4000);
-	g->GetXaxis()->SetRangeUser(130,200);
-        if(g){ g->SetTitle(Form("Ch%02d",ch)); g->Draw("ALP"); gPad->SetGrid(); }
+	g->SetLineWidth(2);
+	g->SetMarkerStyle(20);
+	g->SetMarkerSize(0.4);
+	g->SetMaximum(0.02);
+	g->SetMinimum(-0.2);
+	g->SetMinimum(min_disp_adc);	
+	g->SetMaximum(max_disp_adc);
+	g->GetXaxis()->SetRangeUser(min_disp_time,max_disp_time);
+        g->SetTitle(Form("Ch%02d",ch));
+	gPad->SetGrid();
+	g->GetXaxis()->SetTitleSize(0.06);
+	g->GetYaxis()->SetTitleSize(0.06);
+	g->GetXaxis()->SetTitleOffset(0.5);
+	g->GetYaxis()->SetTitleOffset(1);
+	g->Draw("ALP");
+	
+	TPaveText *pt = (TPaveText*)gPad->GetPrimitive("title");
+	if (pt) {
+	  pt->SetTextSize(0.05);
+	}
+	gPad->Modified();
+	gPad->Update();
+	
     }
-
-    // 下段 Ch15–8 (reverse order)
+    
     int pad=8;
-    for(int ch=15; ch>=8; ch--){
+    for(int ch=8; ch<=15; ch++){
         c1->cd(++pad);
         TGraph* g=(TGraph*)evtDir->Get(Form("ch%02d_%s",ch,tag.Data()));
-	g->SetLineColor(kBlue+1);	
-	g->SetMinimum(1500);
-	g->SetMaximum(4000);
-	g->GetXaxis()->SetRangeUser(130,200);
-	if(g){ g->SetTitle(Form("Ch%02d",ch)); g->Draw("ALP"); gPad->SetGrid(); }
-    }
+	g->SetLineColor(kRed+1);	
+	g->SetLineColor(kRed+1);	
+	g->SetLineWidth(2);
+	g->SetMarkerStyle(20);
+	g->SetMarkerSize(0.4);
+	g->SetMinimum(min_disp_adc);	
+	g->SetMaximum(max_disp_adc);
+	g->GetXaxis()->SetRangeUser(min_disp_time,max_disp_time);
+        g->SetTitle(Form("Ch%02d",ch));
+	gPad->SetGrid();
+	g->GetXaxis()->SetTitleSize(0.06);
+	g->GetYaxis()->SetTitleSize(0.06);
+	g->GetXaxis()->SetTitleOffset(0.5);
+	g->GetYaxis()->SetTitleOffset(1);
+	g->Draw("ALP");
+	
+	TPaveText *pt = (TPaveText*)gPad->GetPrimitive("title");
+	if (pt) {
+	  pt->SetTextSize(0.05);
+	}
+	gPad->Modified();
+	gPad->Update();
 
-    //========================================================
-    //  Canvas ② → 全チャンネル重ね描画
-    //========================================================
-    TCanvas* c2 = new TCanvas(Form("evt%d_overlay",event),
+    }
+    /*
+      TCanvas* c2 = new TCanvas(Form("evt%d_overlay",event),
                               Form("Event %d (%s) overlay",event,tag.Data()),
                               1200,700);
 
     TLegend* leg = new TLegend(0.80,0.2,0.90,0.88);
-    leg->SetBorderSize(0); leg->SetTextSize(0.03);
+    leg->SetBorderSize(0);
+    leg->SetTextSize(0.03);
 
     bool first=true;
     for(int ch=0; ch<16; ch++){
@@ -99,15 +148,24 @@ void draw_event_waveforms(const char* filename="wf.root",
 	
         Color_t c = 1+ch;               // 色分け
         g->SetLineColor(colors[ch]);
-        g->SetLineWidth(2);
-	g->SetMinimum(1500);
-	g->SetMaximum(4000);
+	g->SetLineWidth(2);
+	g->SetMarkerStyle(20);
+	g->SetMarkerSize(0.4);
+	g->SetMinimum(min_disp_adc);	
+	g->SetMaximum(max_disp_adc);
+	g->GetXaxis()->SetRangeUser(min_disp_time,max_disp_time);
+        g->SetTitle(Form("Ch%02d",ch));
+	gPad->SetGrid();
+	g->GetXaxis()->SetTitleSize(0.06);
+	g->GetYaxis()->SetTitleSize(0.06);
+	g->GetXaxis()->SetTitleOffset(0.5);
+	g->GetYaxis()->SetTitleOffset(1);
         if(first){ g->Draw("AL"); first=false; }
-        else      g->Draw("L SAME");
-
-        leg->AddEntry(g,Form("Ch%02d",ch),"l");
-    }
-
+        else       g->Draw("L SAME");
+        leg->AddEntry(g,Form("Ch%02d",ch),"l");	
+    }   
     leg->Draw();
     c2->Update();
+    */
+    
 }
