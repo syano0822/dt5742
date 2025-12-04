@@ -19,7 +19,7 @@ OUTPUT_DIR="output"
 #   ./run_full_pipeline.sh --config converter_config.json
 RAW_ROOT="waveforms.root"
 ANALYSIS_ROOT="waveforms_analyzed.root"
-ANALYSIS_HDF5="waveforms_analyzed.hdf5"
+ANALYSIS_HDF5="waveforms_analyzed.h5"
 
 # Parse command line arguments
 RUN_STAGE1=true
@@ -38,7 +38,7 @@ Options:
     --config FILE            Pipeline configuration (default: converter_config.json)
     --raw-root FILE          Raw ROOT filename (default: waveforms.root)
     --analysis-root FILE     Analysis ROOT filename (default: waveforms_analyzed.root)
-    --analysis-hdf5 FILE     Analysis HDF5 filename (default: waveforms_analyzed.hdf5)
+    --analysis-hdf5 FILE     Analysis HDF5 filename (default: waveforms_analyzed.h5)
     --stage1-only            Run only stage 1 (convert to ROOT)
     --stage2-only            Run only stage 2 (analysis)
     --stage3-only            Run only stage 3 (export to HDF5)
@@ -63,7 +63,7 @@ Stages:
 Output Organization:
     All outputs are organized in subdirectories (default: output/):
       output/root/            - ROOT files (waveforms.root, waveforms_analyzed.root)
-      output/hdf5/            - HDF5 files (waveforms_analyzed.hdf5 and sensor splits)
+      output/hdf5/            - HDF5 files (waveforms_analyzed.h5 and sensor splits)
       output/waveform_plots/  - Waveform plots debug output (if enabled)
       output/temp/            - Temporary files for parallel processing
 
@@ -318,7 +318,7 @@ except:
         if [ -n "$SENSOR_IDS" ]; then
             # Export per sensor
             for SENSOR_ID in $SENSOR_IDS; do
-                OUTPUT_FILE="waveforms_analyzed_sensor$(printf '%02d' $SENSOR_ID).hdf5"
+                OUTPUT_FILE="waveforms_analyzed_sensor$(printf '%02d' $SENSOR_ID).h5"
                 echo "  Exporting analysis features for sensor $SENSOR_ID..."
                 echo "    Input:  $OUTPUT_DIR/root/$ANALYSIS_ROOT"
                 echo "    Output: $OUTPUT_DIR/hdf5/$OUTPUT_FILE"
@@ -361,7 +361,7 @@ if [ -f "$OUTPUT_DIR/root/$ANALYSIS_ROOT" ]; then
 fi
 
 # List HDF5 files (sensor-specific or single file)
-HDF5_FILES=$(ls "$OUTPUT_DIR/hdf5/"*.hdf5 2>/dev/null)
+HDF5_FILES=$(ls "$OUTPUT_DIR/hdf5/"*.h5 2>/dev/null)
 if [ -n "$HDF5_FILES" ]; then
     echo "  HDF5 files:"
     for FILE in $HDF5_FILES; do

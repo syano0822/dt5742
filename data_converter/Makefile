@@ -85,7 +85,7 @@ help:
 	@echo "  or run stages individually:"
 	@echo "    ./convert_to_root --config wave_converter_config.json"
 	@echo "    ./analyze_waveforms --config analysis_config.json"
-	@echo "    ./export_to_hdf5 --mode raw --input waveforms.root --output waveforms.hdf5"
+	@echo "    ./export_to_hdf5 --mode raw --input waveforms.root --output waveforms.h5"
 
 # Test target - run a quick test of the pipeline
 test: $(TARGETS)
