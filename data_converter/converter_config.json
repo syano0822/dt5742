@@ -11,7 +11,7 @@
     "analysis_root": "waveforms_analyzed.root",
     "analysis_tree": "Analysis"
   },
-  "stage1": {
+  "waveform_converter": {
     "input_pattern": "wave_%d.dat",
     "input_dir": "../Data/AC_LGAD_TEST/",
     "input_is_ascii": false,
@@ -23,7 +23,7 @@
     "ped_target": 3500.0,
     "event_policy": "warn"
   },
-  "stage2": {
+  "waveform_analyzer": {
     "analysis_region_min": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     "analysis_region_max": [190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0, 190.0],
     "baseline_region_min": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -46,7 +46,13 @@
     "waveform_plots_only_signal": true,
     "sensor_mapping": {
       "sensor_ids": [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2],
-      "strip_ids": [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7]
+      "column_ids": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "strip_ids": [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7],
+      "use_mapping": true
+    },
+    "corry_export": {
+      "corry_only_fields": true,
+      "default_column": 1
     }
   }
 }
