@@ -102,7 +102,7 @@ import json, sys
 try:
     with open('$CONFIG') as f:
         config = json.load(f)
-        print(config.get('output_dir', 'output'))
+        print(config.get('common', {}).get('output_dir', 'output'))
 except Exception:
     print('output')
 " 2>/dev/null)
