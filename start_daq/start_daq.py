@@ -83,8 +83,12 @@ def update_monitor_config(config_path, daq_path, daq_number):
     with open(config_path, 'r') as f:
         config = json.load(f)
 
-    # Update input_file path
-    config['input_file'] = f"{daq_path}/wave_0.dat"
+    # Update input_file path in monitor section
+    if 'monitor' not in config:
+        config['monitor'] = {}
+
+    config['monitor']['input_file'] = f"{daq_path}/wave_0.dat"
+    config['monitor']['log_file'] = f"{daq_path}/monitor.log"
 
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)
@@ -178,9 +182,17 @@ def setup_tmux_session(base_path):
     subprocess.run(['tmux', 'send-keys', '-t', pane_left_top,
                    f'cd {daq01_path} && wavedump WaveDumpConfig_USB0.txt', 'C-m'])
 
+    # Wait for DAQ01 to initialize
+    print("Starting DAQ01...")
+    time.sleep(1)
+
     # Configure DAQ02 pane (top-right)
     subprocess.run(['tmux', 'send-keys', '-t', pane_right_top,
                    f'cd {daq02_path} && wavedump WaveDumpConfig_USB1.txt', 'C-m'])
+
+    # Wait for DAQ02 to initialize
+    print("Starting DAQ02...")
+    time.sleep(1)
 
     # Configure Monitor1 pane (left-bottom-top)
     subprocess.run(['tmux', 'send-keys', '-t', pane_monitor1,
