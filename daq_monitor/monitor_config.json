@@ -5,7 +5,7 @@
     "display_update_interval_ms": 1000,
     "rate_window_seconds": 10,
 
-    "qa_enabled": true,
+    "qa_enabled": false,
     "qa_sampling_interval": 10,
     "qa_pedestal_samples": 100,
     "qa_baseline_target": 3500.0,
