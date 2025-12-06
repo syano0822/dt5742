@@ -5,6 +5,7 @@
 #include <limits>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,27 @@ NsamplesPolicy ResolveNsamplesPolicy(const std::string &policyText) {
               << "', defaulting to 'strict'" << std::endl;
   }
   return NsamplesPolicy::kStrict;
+}
+
+// Helper to check if sensor should be displayed horizontally
+bool IsSensorHorizontal(int sensorID, const AnalysisConfig& cfg) {
+  // Find unique sensor IDs in current config and map to local index
+  std::set<int> uniqueSensors(cfg.sensor_ids.begin(), cfg.sensor_ids.end());
+  std::vector<int> sortedSensors(uniqueSensors.begin(), uniqueSensors.end());
+  std::sort(sortedSensors.begin(), sortedSensors.end());
+
+  // Find index of this sensorID in the sorted unique list
+  auto it = std::find(sortedSensors.begin(), sortedSensors.end(), sensorID);
+  if (it == sortedSensors.end()) {
+    return false;  // Sensor not found
+  }
+
+  int localIndex = std::distance(sortedSensors.begin(), it);
+  if (localIndex < 0 || localIndex >= static_cast<int>(cfg.sensor_orientations.size())) {
+    return false;  // Out of bounds, default to vertical
+  }
+
+  return cfg.sensor_orientations[localIndex] == "horizontal";
 }
 
 bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t eventEnd = -1) {
@@ -514,19 +536,38 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
         int maxStrip = *std::max_element(strips.begin(), strips.end());
         int nStrips = maxStrip - minStrip + 1;
 
-        // Create histogram: 1 bin in X, nStrips bins in Y
-        TH2F *hist = new TH2F(Form("sensor%02d_amplitude_map", sensorID),
-                              Form("Event %d - Sensor %02d Amplitude Map;X;Strip;Amplitude (V)",
-                                   eventIdx, sensorID),
-                              1, 0, 1,  // X axis: single bin
-                              nStrips, minStrip, maxStrip + 1);  // Y axis: one bin per strip
+        // Check sensor orientation
+        bool isHorizontal = IsSensorHorizontal(sensorID, cfg);
+
+        TH2F *hist = nullptr;
+
+        if (isHorizontal) {
+          // Horizontal: X=strips, Y=1 bin (rotated 90 degrees)
+          hist = new TH2F(Form("sensor%02d_amplitude_map", sensorID),
+                          Form("Event %d - Sensor %02d Amplitude Map;Strip;Y;Amplitude (V)",
+                               eventIdx, sensorID),
+                          nStrips, minStrip, maxStrip + 1,  // X axis: strips
+                          1, 0, 1);  // Y axis: single bin
+        } else {
+          // Vertical: X=1 bin, Y=strips (current behavior)
+          hist = new TH2F(Form("sensor%02d_amplitude_map", sensorID),
+                          Form("Event %d - Sensor %02d Amplitude Map;X;Strip;Amplitude (V)",
+                               eventIdx, sensorID),
+                          1, 0, 1,  // X axis: single bin
+                          nStrips, minStrip, maxStrip + 1);  // Y axis: strips
+        }
 
         // Fill histogram with amplitude values
         for (size_t i = 0; i < channels.size(); ++i) {
           int ch = channels[i];
           int stripID = strips[i];
-          float amplitude = ampMax[ch];  // Use maximum amplitude
-          hist->Fill(0.5, stripID, amplitude);  // X=0.5 (center of bin), Y=stripID
+          float amplitude = ampMax[ch];
+
+          if (isHorizontal) {
+            hist->Fill(stripID, 0.5, amplitude);  // X=stripID, Y=0.5
+          } else {
+            hist->Fill(0.5, stripID, amplitude);  // X=0.5, Y=stripID
+          }
         }
 
         // Save to sensor directory within event (for waveformPlotsFile)

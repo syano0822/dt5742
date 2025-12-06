@@ -48,6 +48,7 @@
       "sensor_ids": [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2],
       "column_ids": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
       "strip_ids": [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7],
+      "sensor_orientations": ["vertical", "horizontal"],
       "use_mapping": true
     },
     "corry_export": {
