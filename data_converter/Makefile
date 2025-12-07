@@ -34,7 +34,7 @@ ifeq ($(HDF5_LIBS),)
 endif
 
 # Targets
-TARGETS = convert_to_root analyze_waveforms export_to_hdf5
+TARGETS = convert_to_root analyze_waveforms export_to_hdf5 combined_analysis
 
 # Default target
 all: $(TARGETS) parallel_analyze.sh
@@ -53,6 +53,16 @@ analyze_waveforms: $(SRCDIR)/analyze_waveforms.cpp include/config/analysis_confi
 export_to_hdf5: $(SRCDIR)/export_to_hdf5.cpp
 	@echo "Building export_to_hdf5..."
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(ROOT_CFLAGS) $(HDF5_CFLAGS) -o $@ $< $(ROOT_LIBS) $(HDF5_LIBS) $(JSON_LIBS)
+
+# Stage 4: Combined multi-sensor analysis
+combined_analysis: $(SRCDIR)/combined_analysis.cpp \
+                   $(SRCDIR)/analysis/multi_sensor_analysis.cpp \
+                   include/analysis/multi_sensor_analysis.h
+	@echo "Building combined_analysis..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(ROOT_CFLAGS) -o $@ \
+		$(SRCDIR)/combined_analysis.cpp \
+		$(SRCDIR)/analysis/multi_sensor_analysis.cpp \
+		$(ROOT_LIBS) $(JSON_LIBS)
 
 # Utility object (optional for reuse)
 utils/file_io.o: $(SRCDIR)/utils/file_io.cpp include/utils/file_io.h

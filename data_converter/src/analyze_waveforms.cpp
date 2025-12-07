@@ -5,6 +5,7 @@
 #include <limits>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,27 @@ NsamplesPolicy ResolveNsamplesPolicy(const std::string &policyText) {
               << "', defaulting to 'strict'" << std::endl;
   }
   return NsamplesPolicy::kStrict;
+}
+
+// Helper to check if sensor should be displayed horizontally
+bool IsSensorHorizontal(int sensorID, const AnalysisConfig& cfg) {
+  // Find unique sensor IDs in current config and map to local index
+  std::set<int> uniqueSensors(cfg.sensor_ids.begin(), cfg.sensor_ids.end());
+  std::vector<int> sortedSensors(uniqueSensors.begin(), uniqueSensors.end());
+  std::sort(sortedSensors.begin(), sortedSensors.end());
+
+  // Find index of this sensorID in the sorted unique list
+  auto it = std::find(sortedSensors.begin(), sortedSensors.end(), sensorID);
+  if (it == sortedSensors.end()) {
+    return false;  // Sensor not found
+  }
+
+  int localIndex = std::distance(sortedSensors.begin(), it);
+  if (localIndex < 0 || localIndex >= static_cast<int>(cfg.sensor_orientations.size())) {
+    return false;  // Out of bounds, default to vertical
+  }
+
+  return cfg.sensor_orientations[localIndex] == "horizontal";
 }
 
 bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t eventEnd = -1) {
@@ -476,120 +498,8 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
       }
     }
 
-    // Create 2D histograms for each sensor showing signal amplitudes
-    if (waveformPlotsFile || qualityCheckFile) {
-      // Determine which sensors are present and how many strips each has
-      std::map<int, std::vector<int>> sensorStrips;  // sensor ID -> list of strip IDs
-      std::map<int, std::vector<int>> sensorChannels; // sensor ID -> list of channel indices
-
-      for (int ch = 0; ch < cfg.n_channels(); ++ch) {
-        int sensorID = cfg.sensor_ids[ch];
-        int stripID = cfg.strip_ids[ch];
-        sensorStrips[sensorID].push_back(stripID);
-        sensorChannels[sensorID].push_back(ch);
-      }
-
-      // Create event directory if not exists (for waveformPlotsFile)
-      char eventDirName[64];
-      std::snprintf(eventDirName, sizeof(eventDirName), "event_%06d", eventIdx);
-      TDirectory *eventDir = nullptr;
-      if (waveformPlotsFile) {
-        eventDir = waveformPlotsFile->GetDirectory(eventDirName);
-        if (!eventDir) {
-          eventDir = waveformPlotsFile->mkdir(eventDirName);
-        }
-      }
-
-      // Store histograms for quality check canvas
-      std::map<int, TH2F*> sensorHistograms;
-
-      // Create histogram for each sensor
-      for (const auto &sensorPair : sensorStrips) {
-        int sensorID = sensorPair.first;
-        const std::vector<int> &strips = sensorPair.second;
-        const std::vector<int> &channels = sensorChannels[sensorID];
-
-        // Find strip range
-        int minStrip = *std::min_element(strips.begin(), strips.end());
-        int maxStrip = *std::max_element(strips.begin(), strips.end());
-        int nStrips = maxStrip - minStrip + 1;
-
-        // Create histogram: 1 bin in X, nStrips bins in Y
-        TH2F *hist = new TH2F(Form("sensor%02d_amplitude_map", sensorID),
-                              Form("Event %d - Sensor %02d Amplitude Map;X;Strip;Amplitude (V)",
-                                   eventIdx, sensorID),
-                              1, 0, 1,  // X axis: single bin
-                              nStrips, minStrip, maxStrip + 1);  // Y axis: one bin per strip
-
-        // Fill histogram with amplitude values
-        for (size_t i = 0; i < channels.size(); ++i) {
-          int ch = channels[i];
-          int stripID = strips[i];
-          float amplitude = ampMax[ch];  // Use maximum amplitude
-          hist->Fill(0.5, stripID, amplitude);  // X=0.5 (center of bin), Y=stripID
-        }
-
-        // Save to sensor directory within event (for waveformPlotsFile)
-        if (waveformPlotsFile && eventDir) {
-          TDirectory *sensorDir = eventDir->GetDirectory(Form("sensor%02d", sensorID));
-          if (!sensorDir) {
-            sensorDir = eventDir->mkdir(Form("sensor%02d", sensorID));
-          }
-          sensorDir->cd();
-          hist->Write(hist->GetName(), TObject::kOverwrite);
-        }
-
-        // Store histogram for quality check canvas
-        sensorHistograms[sensorID] = hist;
-      }
-
-      // Create quality check canvas with all 4 sensors
-      if (qualityCheckFile && sensorHistograms.size() >= 4) {
-        qualityCheckFile->cd();
-
-        // Create canvas with 4 columns (1x4 layout)
-        char canvasName[64];
-        std::snprintf(canvasName, sizeof(canvasName), "event_%06d_quality_check", eventIdx);
-        TCanvas *canvas = new TCanvas(canvasName,
-                                      Form("Event %d - All Sensors Quality Check", eventIdx),
-                                      2400, 600);  // Wide canvas for 4 columns
-        canvas->Divide(4, 1);  // 4 columns, 1 row
-
-        // Draw each sensor in its own pad (sensors 1-4)
-        for (int sensorID = 1; sensorID <= 4; ++sensorID) {
-          canvas->cd(sensorID);  // Move to pad sensorID
-
-          auto it = sensorHistograms.find(sensorID);
-          if (it != sensorHistograms.end()) {
-            // Clone the histogram to avoid deletion issues
-            TH2F *histClone = (TH2F*)it->second->Clone(Form("sensor%02d_qc_clone", sensorID));
-            histClone->SetStats(0);  // Hide statistics box
-            histClone->Draw("COLZ");  // Draw with color scale
-          } else {
-            // Create empty histogram if sensor not found
-            TH2F *emptyHist = new TH2F(Form("sensor%02d_empty", sensorID),
-                                       Form("Event %d - Sensor %02d (No Data);X;Strip;Amplitude (V)",
-                                            eventIdx, sensorID),
-                                       1, 0, 1, 8, 0, 8);
-            emptyHist->SetStats(0);
-            emptyHist->Draw("COLZ");
-          }
-        }
-
-        // Save canvas to quality check file
-        canvas->Write(canvasName, TObject::kOverwrite);
-        delete canvas;  // Canvas deletion will handle cloned histograms
-      }
-
-      // Clean up sensor histograms
-      for (auto &pair : sensorHistograms) {
-        delete pair.second;
-      }
-
-      if (waveformPlotsFile) {
-        waveformPlotsFile->cd();
-      }
-    }
+    // NOTE: Amplitude map generation has been moved to Stage 4 (combined_analysis)
+    // This allows for combined analysis of data from multiple digitizers
 
     // Check if waveform plots file needs rotation (after saving all plots for this event)
     if (waveformPlotsFile) {
