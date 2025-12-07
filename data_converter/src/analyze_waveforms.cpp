@@ -5,6 +5,7 @@
 #include <limits>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -54,16 +55,53 @@ NsamplesPolicy ResolveNsamplesPolicy(const std::string &policyText) {
   return NsamplesPolicy::kStrict;
 }
 
+// Helper to check if sensor should be displayed horizontally
+bool IsSensorHorizontal(int sensorID, const AnalysisConfig& cfg) {
+  // Find unique sensor IDs in current config and map to local index
+  std::set<int> uniqueSensors(cfg.sensor_ids.begin(), cfg.sensor_ids.end());
+  std::vector<int> sortedSensors(uniqueSensors.begin(), uniqueSensors.end());
+  std::sort(sortedSensors.begin(), sortedSensors.end());
+
+  // Find index of this sensorID in the sorted unique list
+  auto it = std::find(sortedSensors.begin(), sortedSensors.end(), sensorID);
+  if (it == sortedSensors.end()) {
+    return false;  // Sensor not found
+  }
+
+  int localIndex = std::distance(sortedSensors.begin(), it);
+  if (localIndex < 0 || localIndex >= static_cast<int>(cfg.sensor_orientations.size())) {
+    return false;  // Out of bounds, default to vertical
+  }
+
+  return cfg.sensor_orientations[localIndex] == "horizontal";
+}
+
 bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t eventEnd = -1) {
+  // Maximum file size for waveform plots: 4 GB
+  const Long64_t MAX_PLOTS_FILE_SIZE = 4LL * 1024 * 1024 * 1024;  // 4 GB in bytes
+
   // Create waveform plots ROOT file if enabled
   TFile *waveformPlotsFile = nullptr;
-  auto openWaveformPlotsFile = [&](TFile *&outFile) {
+  int waveformPlotsFileCounter = 0;
+
+  auto openWaveformPlotsFile = [&](TFile *&outFile, int fileNum) {
     if (!cfg.waveform_plots_enabled) {
       return;
     }
-    std::string waveformPlotsFileName =
-        BuildOutputPath(cfg.output_dir(), "waveform_plots",
-                        cfg.waveform_plots_dir + ".root");
+
+    std::string baseFileName = cfg.waveform_plots_dir;
+    std::string waveformPlotsFileName;
+
+    if (fileNum == 0) {
+      waveformPlotsFileName = BuildOutputPath(cfg.output_dir(), "waveform_plots",
+                                               baseFileName + ".root");
+    } else {
+      char suffix[32];
+      std::snprintf(suffix, sizeof(suffix), "_%03d.root", fileNum);
+      waveformPlotsFileName = BuildOutputPath(cfg.output_dir(), "waveform_plots",
+                                               baseFileName + suffix);
+    }
+
     if (!EnsureParentDirectory(waveformPlotsFileName)) {
       std::cerr << "WARNING: Failed to create waveform plots output directory for "
                 << waveformPlotsFileName << std::endl;
@@ -78,12 +116,72 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
       return;
     }
     std::cout << "Waveform plots output enabled. Saving to: " << waveformPlotsFileName << std::endl;
-    if (cfg.waveform_plots_only_signal) {
+    if (cfg.waveform_plots_only_signal && fileNum == 0) {
       std::cout << "  Only saving waveforms with detected signals (SNR > "
                 << cfg.snr_threshold << ")" << std::endl;
     }
   };
-  openWaveformPlotsFile(waveformPlotsFile);
+
+  auto checkAndRotateWaveformPlotsFile = [&](TFile *&outFile) {
+    if (!outFile || outFile->IsZombie()) {
+      return;
+    }
+
+    Long64_t currentSize = outFile->GetSize();
+    if (currentSize >= MAX_PLOTS_FILE_SIZE) {
+      std::cout << "Waveform plots file size reached " << (currentSize / (1024.0 * 1024.0 * 1024.0))
+                << " GB. Rotating to new file..." << std::endl;
+
+      // Close current file
+      std::string currentFileName = outFile->GetName();
+      outFile->Close();
+      delete outFile;
+      outFile = nullptr;
+
+      std::cout << "Saved waveform plots to: " << currentFileName << std::endl;
+
+      // Open new file with incremented counter
+      waveformPlotsFileCounter++;
+      openWaveformPlotsFile(outFile, waveformPlotsFileCounter);
+    }
+  };
+
+  openWaveformPlotsFile(waveformPlotsFile, waveformPlotsFileCounter);
+
+  // Create quality check ROOT file
+  TFile *qualityCheckFile = nullptr;
+  if (cfg.waveform_plots_enabled) {
+    // Use same naming scheme as waveform_plots_dir for quality check
+    // If waveform_plots_dir is "waveform_plots", use "quality_check"
+    // If waveform_plots_dir is "waveform_plots_chunk_0", use "quality_check_chunk_0"
+    std::string qualityCheckBaseName = cfg.waveform_plots_dir;
+
+    // Replace "waveform_plots" with "quality_check" in the base name
+    size_t pos = qualityCheckBaseName.find("waveform_plots");
+    if (pos != std::string::npos) {
+      qualityCheckBaseName.replace(pos, std::string("waveform_plots").length(), "quality_check");
+    } else {
+      // Fallback: just use "quality_check" prefix
+      qualityCheckBaseName = "quality_check_" + qualityCheckBaseName;
+    }
+
+    std::string qualityCheckFileName = BuildOutputPath(cfg.output_dir(), "quality_check",
+                                                       qualityCheckBaseName + ".root");
+    if (!EnsureParentDirectory(qualityCheckFileName)) {
+      std::cerr << "WARNING: Failed to create quality_check output directory for "
+                << qualityCheckFileName << std::endl;
+    } else {
+      qualityCheckFile = TFile::Open(qualityCheckFileName.c_str(), "RECREATE");
+      if (!qualityCheckFile || qualityCheckFile->IsZombie()) {
+        std::cerr << "WARNING: Failed to create quality_check output file "
+                  << qualityCheckFileName << std::endl;
+        std::cerr << "         Continuing without quality_check output..." << std::endl;
+        qualityCheckFile = nullptr;
+      } else {
+        std::cout << "Quality check output enabled. Saving to: " << qualityCheckFileName << std::endl;
+      }
+    }
+  }
 
   // Build input path: output_dir/root/input_root
   std::string inputPath = BuildOutputPath(cfg.output_dir(), "root", cfg.input_root());
@@ -400,64 +498,12 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
       }
     }
 
-    // Create 2D histograms for each sensor showing signal amplitudes
+    // NOTE: Amplitude map generation has been moved to Stage 4 (combined_analysis)
+    // This allows for combined analysis of data from multiple digitizers
+
+    // Check if waveform plots file needs rotation (after saving all plots for this event)
     if (waveformPlotsFile) {
-      // Determine which sensors are present and how many strips each has
-      std::map<int, std::vector<int>> sensorStrips;  // sensor ID -> list of strip IDs
-      std::map<int, std::vector<int>> sensorChannels; // sensor ID -> list of channel indices
-
-      for (int ch = 0; ch < cfg.n_channels(); ++ch) {
-        int sensorID = cfg.sensor_ids[ch];
-        int stripID = cfg.strip_ids[ch];
-        sensorStrips[sensorID].push_back(stripID);
-        sensorChannels[sensorID].push_back(ch);
-      }
-
-      // Create event directory if not exists
-      char eventDirName[64];
-      std::snprintf(eventDirName, sizeof(eventDirName), "event_%06d", eventIdx);
-      TDirectory *eventDir = waveformPlotsFile->GetDirectory(eventDirName);
-      if (!eventDir) {
-        eventDir = waveformPlotsFile->mkdir(eventDirName);
-      }
-
-      // Create histogram for each sensor
-      for (const auto &sensorPair : sensorStrips) {
-        int sensorID = sensorPair.first;
-        const std::vector<int> &strips = sensorPair.second;
-        const std::vector<int> &channels = sensorChannels[sensorID];
-
-        // Find strip range
-        int minStrip = *std::min_element(strips.begin(), strips.end());
-        int maxStrip = *std::max_element(strips.begin(), strips.end());
-        int nStrips = maxStrip - minStrip + 1;
-
-        // Create histogram: 1 bin in X, nStrips bins in Y
-        TH2F *hist = new TH2F(Form("sensor%02d_amplitude_map", sensorID),
-                              Form("Event %d - Sensor %02d Amplitude Map;X;Strip;Amplitude (V)",
-                                   eventIdx, sensorID),
-                              1, 0, 1,  // X axis: single bin
-                              nStrips, minStrip, maxStrip + 1);  // Y axis: one bin per strip
-
-        // Fill histogram with amplitude values
-        for (size_t i = 0; i < channels.size(); ++i) {
-          int ch = channels[i];
-          int stripID = strips[i];
-          float amplitude = ampMax[ch];  // Use maximum amplitude
-          hist->Fill(0.5, stripID, amplitude);  // X=0.5 (center of bin), Y=stripID
-        }
-
-        // Save to sensor directory within event
-        TDirectory *sensorDir = eventDir->GetDirectory(Form("sensor%02d", sensorID));
-        if (!sensorDir) {
-          sensorDir = eventDir->mkdir(Form("sensor%02d", sensorID));
-        }
-        sensorDir->cd();
-        hist->Write(hist->GetName(), TObject::kOverwrite);
-        delete hist;
-      }
-
-      waveformPlotsFile->cd();
+      checkAndRotateWaveformPlotsFile(waveformPlotsFile);
     }
 
     outputTree->Fill();
@@ -469,6 +515,12 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
       waveformPlotsFile->Close();
       delete waveformPlotsFile;
       waveformPlotsFile = nullptr;
+    }
+    if (qualityCheckFile) {
+      qualityCheckFile->cd();
+      qualityCheckFile->Close();
+      delete qualityCheckFile;
+      qualityCheckFile = nullptr;
     }
     outputFile->Close();
     inputFile->Close();
@@ -482,11 +534,24 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
 
   // Close waveform plots file if it was created
   if (waveformPlotsFile) {
+    std::string finalFileName = waveformPlotsFile->GetName();
     waveformPlotsFile->cd();
     waveformPlotsFile->Close();
     delete waveformPlotsFile;
-    std::string waveformPlotsFullPath = BuildOutputPath(cfg.output_dir(), "waveform_plots", cfg.waveform_plots_dir + ".root");
-    std::cout << "Waveform plots output saved to " << waveformPlotsFullPath << std::endl;
+    std::cout << "Waveform plots output saved to " << finalFileName << std::endl;
+    if (waveformPlotsFileCounter > 0) {
+      std::cout << "  Total files created: " << (waveformPlotsFileCounter + 1)
+                << " (split due to 4GB size limit)" << std::endl;
+    }
+  }
+
+  // Close quality check file if it was created
+  if (qualityCheckFile) {
+    std::string finalFileName = qualityCheckFile->GetName();
+    qualityCheckFile->cd();
+    qualityCheckFile->Close();
+    delete qualityCheckFile;
+    std::cout << "Quality check output saved to " << finalFileName << std::endl;
   }
 
   std::string outputFullPath = BuildOutputPath(cfg.output_dir(), "root", cfg.output_root());
