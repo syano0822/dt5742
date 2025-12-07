@@ -389,7 +389,6 @@ if [ ${#FAILED_DAQS[@]} -eq 0 ]; then
     echo ""
     echo "=========================================="
     echo ""
-
     exit 0
 else
     echo "WARNING: Some DAQs failed to process:"
