@@ -303,6 +303,63 @@ if [ ${#FAILED_DAQS[@]} -eq 0 ]; then
         echo ""
     done
 
+    # Merge quality check files into shared QA directory
+    echo "=========================================="
+    echo "Merging Quality Check Files"
+    echo "=========================================="
+
+    SHARED_QA_DIR="${BASE_DATA_DIR}/qa"
+    mkdir -p "$SHARED_QA_DIR"
+
+    # Collect quality check files from all DAQs
+    QC_FILES=()
+    for daq_name in "${DAQ_NAMES[@]}"; do
+        daq_qc_file="${BASE_DATA_DIR}/${daq_name}/output/quality_check/quality_check.root"
+        if [ -f "$daq_qc_file" ]; then
+            QC_FILES+=("$daq_qc_file")
+            echo "Found: $daq_qc_file"
+        else
+            echo "WARNING: No quality check file for $daq_name"
+        fi
+    done
+
+    # Merge if we have quality check files
+    if [ ${#QC_FILES[@]} -gt 0 ]; then
+        MERGED_QC_FILE="${SHARED_QA_DIR}/quality_check.root"
+
+        echo ""
+        echo "Merging ${#QC_FILES[@]} file(s) into: $MERGED_QC_FILE"
+
+        hadd -f "$MERGED_QC_FILE" "${QC_FILES[@]}" > /dev/null 2>&1
+
+        if [ $? -eq 0 ]; then
+            echo "SUCCESS: Quality check files merged"
+
+            MERGED_SIZE=$(ls -lh "$MERGED_QC_FILE" | awk '{print $5}')
+            echo "  Merged file size: $MERGED_SIZE"
+            echo ""
+
+            # Delete individual DAQ quality check files
+            echo "Cleaning up individual DAQ files..."
+            for qc_file in "${QC_FILES[@]}"; do
+                rm -f "$qc_file"
+                echo "  Deleted: $qc_file"
+            done
+            echo ""
+
+            echo "All 4 sensors available in: $MERGED_QC_FILE"
+        else
+            echo "ERROR: Failed to merge quality check files"
+            echo "  Individual files preserved"
+        fi
+    else
+        echo "WARNING: No quality check files found"
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo ""
+
     exit 0
 else
     echo "WARNING: Some DAQs failed to process:"

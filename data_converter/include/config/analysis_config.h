@@ -75,6 +75,7 @@ struct AnalysisConfig {
   // Sensor mapping (per channel)
   std::vector<int> sensor_ids;  // Which sensor each channel belongs to
   std::vector<int> strip_ids;   // Strip number within sensor
+  std::vector<std::string> sensor_orientations;  // "vertical" or "horizontal" per sensor
 
   // Constructor with default values
   AnalysisConfig() {
@@ -93,6 +94,7 @@ struct AnalysisConfig {
     // Default sensor mapping: ch0-7 = sensor 1, ch8-15 = sensor 2
     sensor_ids = {1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2};
     strip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7};
+    sensor_orientations = {"vertical", "vertical"};  // Default: all vertical (local sensors)
   }
 };
 
@@ -191,6 +193,18 @@ inline bool LoadAnalysisConfigFromJson(const std::string &path,
     if (GetObject(waveformAnalyzer, "sensor_mapping", sensorSection)) {
       GetIntArray(sensorSection, "sensor_ids", cfg.sensor_ids);
       GetIntArray(sensorSection, "strip_ids", cfg.strip_ids);
+
+      // Parse sensor orientations
+      simdjson::dom::array orientationsArray;
+      if (sensorSection["sensor_orientations"].get(orientationsArray) == simdjson::SUCCESS) {
+        cfg.sensor_orientations.clear();
+        for (auto val : orientationsArray) {
+          std::string_view sv;
+          if (val.get(sv) == simdjson::SUCCESS) {
+            cfg.sensor_orientations.push_back(std::string(sv));
+          }
+        }
+      }
     }
   }
 
@@ -240,6 +254,24 @@ inline bool LoadAnalysisConfigFromJson(const std::string &path,
     cfg.strip_ids.resize(cfg.common.n_channels);
     for (int i = 0; i < cfg.common.n_channels; ++i) {
       cfg.strip_ids[i] = i % 8;
+    }
+  }
+
+  // Validate sensor orientations (typically 2 entries for local sensors)
+  if (cfg.sensor_orientations.empty()) {
+    cfg.sensor_orientations.resize(2, "vertical");
+  }
+
+  // Validate values and convert to lowercase
+  for (size_t i = 0; i < cfg.sensor_orientations.size(); ++i) {
+    std::string& orient = cfg.sensor_orientations[i];
+    std::transform(orient.begin(), orient.end(), orient.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    if (orient != "vertical" && orient != "horizontal") {
+      std::cerr << "WARNING: Invalid orientation '" << orient
+                << "' for sensor " << (i+1) << ", defaulting to 'vertical'" << std::endl;
+      orient = "vertical";
     }
   }
 
