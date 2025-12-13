@@ -119,27 +119,18 @@ def setup_tmux_session(base_path, args):
 
     # Copy config files using Python (to avoid race conditions with tmux)
     # Copy WaveDump configs
-    shutil.copy(
-        args.wavedump_usb0,
-        os.path.join(daq00_path, 'WaveDumpConfig_USB0.txt')
-    )
-
-    shutil.copy(
-        args.wavedump_usb1,
-        os.path.join(daq01_path, 'WaveDumpConfig_USB1.txt')
-    )    
-    #shutil.copy('/opt/WaveDumpConfig_USB0.txt', os.path.join(daq00_path, 'WaveDumpConfig_USB0.txt'))
-    #shutil.copy('/opt/WaveDumpConfig_USB1.txt', os.path.join(daq01_path, 'WaveDumpConfig_USB1.txt'))
+    shutil.copy(args.wavedump_usb0, os.path.join(daq00_path, 'WaveDumpConfig_USB0.txt'))
+    shutil.copy(args.wavedump_usb1, os.path.join(daq01_path, 'WaveDumpConfig_USB1.txt'))
     print(f"Copied WaveDump config files")
 
     # Copy and update monitor configs
     config_path_01 = os.path.join(daq00_path, 'monitor_config.json')
     config_path_02 = os.path.join(daq01_path, 'monitor_config.json')
 
-    shutil.copy('/opt/dt5742/daq_monitor/monitor_config.json', config_path_01)
+    shutil.copy(args.monitor_config, config_path_01)
     update_monitor_config(config_path_01, daq00_path, '00')
 
-    shutil.copy('/opt/dt5742/daq_monitor/monitor_config.json', config_path_02)
+    shutil.copy(args.monitor_config, config_path_02)
     update_monitor_config(config_path_02, daq01_path, '01')
 
     # Create new tmux session and get the initial pane ID
@@ -226,11 +217,49 @@ def main():
         'run_identifier',
         help='Run number (will be formatted as 6-digit) or folder name (string)'
     )
-    parser.add_argument("--wavedump-usb0", default="/opt/WaveDumpConfig_USB0.txt")
-    parser.add_argument("--wavedump-usb1", default="/opt/WaveDumpConfig_USB1.txt")
-    #parser.add_argument("--monitor-config", default="/opt/dt5742/daq_monitor/monitor_config.json")
-    
+
+    # Optional config paths
+    parser.add_argument(
+        "--wavedump-config",
+        default=None,
+        help=("Directory containing WaveDump_Config_usb00.txt and "
+              "WaveDump_Config_usb01.txt. If --wavedump-usb0/--wavedump-usb1 are "
+              "not given, they will be taken from this directory.")
+    )
+    parser.add_argument(
+        "--wavedump-usb0",
+        default=None,
+        help="Path to WaveDump config for USB0 (overrides --wavedump-config)."
+    )
+    parser.add_argument(
+        "--wavedump-usb1",
+        default=None,
+        help="Path to WaveDump config for USB1 (overrides --wavedump-config)."
+    )
+    parser.add_argument(
+        "--monitor-config",
+        default="/opt/dt5742/daq_monitor/monitor_config.json",
+        help="Path to monitor_config.json template."
+    )
+
     args = parser.parse_args()
+
+    # Resolve WaveDump config paths
+    if args.wavedump_config:
+        usb0_default = os.path.join(args.wavedump_config, "WaveDump_Config_usb00.txt")
+        usb1_default = os.path.join(args.wavedump_config, "WaveDump_Config_usb01.txt")
+    else:
+        usb0_default = "/opt/WaveDumpConfig_USB0.txt"
+        usb1_default = "/opt/WaveDumpConfig_USB1.txt"
+
+    args.wavedump_usb0 = args.wavedump_usb0 or usb0_default
+    args.wavedump_usb1 = args.wavedump_usb1 or usb1_default
+
+    # Sanity check: config files must exist
+    for p in (args.wavedump_usb0, args.wavedump_usb1, args.monitor_config):
+        if not os.path.isfile(p):
+            raise FileNotFoundError(f"Config file not found: {p}")
+
 
     session_name = "caen_daq"
 
@@ -256,9 +285,9 @@ def main():
 
     # Create folder structure
     base_path = create_folder_structure(args.run_identifier)
-    
+
     # Setup tmux session
-    session_name = setup_tmux_session(base_path,args)
+    session_name = setup_tmux_session(base_path, args)
 
     # Wait for processes to start
     time.sleep(1)
