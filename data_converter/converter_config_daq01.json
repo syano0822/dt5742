@@ -1,7 +1,7 @@
 {
   "common": {
-    "output_dir": "/Users/syano/data/AC_LGAD_TEST",
-    "runnumber": 1,
+    "output_dir": "/Users/syano/data",
+    "runnumber": 999999,
     "daq_name": "daq01",
     "n_channels": 16,
     "n_sensors": 1,
@@ -17,10 +17,10 @@
   },
   "waveform_converter": {
     "input_pattern": "wave_%d.dat",
-    "input_dir": "/Users/syano/data/AC_LGAD_TEST",
+    "input_dir": "/Users/syano/data",
     "input_is_ascii": false,
     "special_channel_file": "TR_0_0.dat",
-    "enable_special_override": true,
+    "enable_special_override": false,
     "special_channel_index": 3,
     "tsample_ns": 0.2,
     "pedestal_window": 100,

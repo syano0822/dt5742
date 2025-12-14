@@ -50,7 +50,7 @@ void QuickCheckHitMapDUT(int runnumber=1){
   TTree *ttree[2];
 
   for (int daq=0; daq<2; daq++) {
-    fname[daq] = Form("/Users/syano/data/AC_LGAD_TEST/%s/daq0%d/output/root/waveforms_analyzed.root",to6digits(runnumber).c_str(),daq);
+    fname[daq] = Form("/Users/syano/data/%s/daq0%d/output/root/waveforms_analyzed.root",to6digits(runnumber).c_str(),daq);
     if (!CheckFileExist(fname[daq])) {
       cout<<"[ERROR] The file "<<fname[daq]<<" doesn't exist."<<endl;
       cout<<"        Check run number or if you execute analyze_waveforms (stage-2) again!"<<endl;
@@ -148,6 +148,10 @@ void QuickCheckHitMapDUT(int runnumber=1){
   
   TH2F* hist_amp_risetime = new TH2F("hist_amp_risetime","",3000,0,3000,200,0,2);
   hist_amp_risetime->SetTitle("; Amplitude [ADC]; Rise-Time (10-90 pc) [ns]");
+
+  TH2F* hist_peak_time = new TH2F("hist_peak_time","",3000,0,3000,200,0,2);
+  hist_peak_time->SetTitle("; Amplitude [ADC]; Peak [ns]");
+
   
   TH2F* hist_hit_pos_sum = new TH2F("hist_hit_pos_sum","",400,-20,20,400,-20,20);
   TH2F* hist_hit_pos[4];
@@ -163,12 +167,25 @@ void QuickCheckHitMapDUT(int runnumber=1){
   hist_max_amp->SetLineColor(kRed);
   
   TH1F* hist_diff_cfd_time[4][4];
+  TH2F* hist_corr_xx[4][4];
+  TH2F* hist_corr_yy[4][4];
+  TH2F* hist_corr_xy[4][4];
   for (int sens1=0; sens1<4; sens1++) {
     for (int sens2=0; sens2<4; sens2++) {
       hist_diff_cfd_time[sens1][sens2] = new TH1F(Form("hist_diff_cfd_time_sensor%d_sensor%d",sens1,sens2),"",1000,0,100);
       hist_diff_cfd_time[sens1][sens2]->SetTitle(";#Delta CFD(50pc); Entries");
+
+      hist_corr_xx[sens1][sens2] = new TH2F(Form("hist_corr_xx_sensor%d_sensor%d",sens1,sens2),"",400,-20,20,400,-20,20);
+      hist_corr_xx[sens1][sens2]->SetTitle(Form(";x_%d [mm]; x_%d [mm]",sens1,sens2));      
+      hist_corr_yy[sens1][sens2] = new TH2F(Form("hist_corr_yy_sensor%d_sensor%d",sens1,sens2),"",400,-20,20,400,-20,20);
+      hist_corr_yy[sens1][sens2]->SetTitle(Form(";y_%d [mm]; y_%d [mm]",sens1,sens2));      
+      hist_corr_xy[sens1][sens2] = new TH2F(Form("hist_corr_xy_sensor%d_sensor%d",sens1,sens2),"",400,-20,20,400,-20,20);
+      hist_corr_xy[sens1][sens2]->SetTitle(Form(";x_%d [mm]; y_%d [mm]",sens1,sens2));      
     }
   }
+
+
+  
   
   int numV=0;
   int numH=0;
@@ -243,6 +260,8 @@ void QuickCheckHitMapDUT(int runnumber=1){
     int nV=0;
 
     float max_cfd_time[4]={}; 
+    float meas_x[4]={};
+    float meas_y[4]={};
     
     for (auto sens_id : unique_sensorIDs) {
       int max_daq=high_amp_daqid[sens_id].first;
@@ -254,6 +273,7 @@ void QuickCheckHitMapDUT(int runnumber=1){
       hist_amp_jitter->Fill(max_amp,jitterRMS[max_daq].at(max_ch));  
       hist_amp_risetime->Fill(max_amp,riseTime[max_daq].at(max_ch));  
       hist_max_amp->Fill(max_amp);
+      hist_peak_time->Fill(max_amp,peakTime[max_daq].at(max_ch));
       
       bool isH = isHorizontal[max_daq].at(max_ch);
       
@@ -287,11 +307,15 @@ void QuickCheckHitMapDUT(int runnumber=1){
       if (isH) {	
 	map_sensor_hitpos[sens_id]={mean_col,mean_row};	
 	hist_hit_pos[sens_id]->Fill(mean_col-10,mean_row-16);
+	meas_x[sens_id] = mean_col-10;
+	meas_y[sens_id] = mean_row-16;
 	event_hitpos[1] += mean_row;
 	nH++;
       } else {
 	map_sensor_hitpos[sens_id]={mean_row,mean_col};
 	hist_hit_pos[sens_id]->Fill(mean_row-16,mean_col-10);
+	meas_x[sens_id] = mean_row-16;
+	meas_y[sens_id] = mean_col-10;
 	event_hitpos[0] += mean_row;
 	nV++;
       }            
@@ -302,8 +326,15 @@ void QuickCheckHitMapDUT(int runnumber=1){
 	hist_diff_cfd_time[sens_id1][sens_id2]->Fill(max_cfd_time[sens_id1]-max_cfd_time[sens_id2]);
       }
     }
-    
 
+    for (auto sens_id1 : unique_sensorIDs){
+      for (auto sens_id2 : unique_sensorIDs){
+	hist_corr_xx[sens_id1][sens_id2]->Fill(meas_x[sens_id1],meas_x[sens_id2]);	
+	hist_corr_yy[sens_id1][sens_id2]->Fill(meas_y[sens_id1],meas_y[sens_id2]);	
+	hist_corr_xy[sens_id1][sens_id2]->Fill(meas_x[sens_id1],meas_y[sens_id2]);
+      }
+    }
+    
     if (!isChecked) {
       numV = nV;
       numH = nH;
@@ -401,6 +432,19 @@ void QuickCheckHitMapDUT(int runnumber=1){
   hist_max_amp->Draw("same");
   c2->cd(4);
   hist_diff_cfd_time[0][1]->Draw("");
+
+  TCanvas* c3 = new TCanvas("c3","",1200,300);
+  c3->Divide(4,1);
+  c3->cd(1);
+  hist_corr_xx[0][1]->Draw("");
+  c3->cd(2);
+  hist_corr_yy[0][1]->Draw("");
+  c3->cd(3);
+  hist_corr_xy[0][1]->Draw("");
+  c3->cd(4);
+  hist_corr_xy[1][0]->Draw("");
+
+  
   cout<<"The number of Horizontal Sensor = "<<numH<<endl;
   cout<<"The number of Vertical Sensor = "<<numV<<endl;
 }
