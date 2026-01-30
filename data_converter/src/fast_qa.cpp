@@ -14,6 +14,7 @@
 #include "TCanvas.h"
 #include "TLegend.h"
 #include "TStyle.h"
+#include "TROOT.h"
 
 #include "config/analysis_config.h"
 #include "utils/filesystem_utils.h"
@@ -40,6 +41,7 @@ bool EnsureParentDirectory(const std::string &path) {
 }
 
 bool RunFastQA(const AnalysisConfig &cfg) {
+  gROOT->SetBatch(true);  // Enable batch mode - no GUI
   gStyle->SetOptStat(0);  // Disable statistics box
 
   string outname_base = cfg.output_dir() + '/';
@@ -163,10 +165,27 @@ bool RunFastQA(const AnalysisConfig &cfg) {
 
     // Create amplitude maps per sensor for this event
     std::map<int, std::vector<int>> sensorChannels;
+    std::map<int, int> sensorMinCol, sensorMaxCol, sensorMinStrip, sensorMaxStrip;
     for (int ch = 0; ch < nCh; ++ch) {
       if (ch < static_cast<int>(sensorID->size())) {
         int sid = sensorID->at(ch);
         sensorChannels[sid].push_back(ch);
+
+        // Track column and strip ranges per sensor
+        int col = (ch < static_cast<int>(sensorRow->size())) ? sensorRow->at(ch) : 0;
+        int strip = (ch < static_cast<int>(sensorCol->size())) ? sensorCol->at(ch) : 0;
+
+        if (sensorMinCol.find(sid) == sensorMinCol.end()) {
+          sensorMinCol[sid] = col;
+          sensorMaxCol[sid] = col;
+          sensorMinStrip[sid] = strip;
+          sensorMaxStrip[sid] = strip;
+        } else {
+          sensorMinCol[sid] = std::min(sensorMinCol[sid], col);
+          sensorMaxCol[sid] = std::max(sensorMaxCol[sid], col);
+          sensorMinStrip[sid] = std::min(sensorMinStrip[sid], strip);
+          sensorMaxStrip[sid] = std::max(sensorMaxStrip[sid], strip);
+        }
       }
     }
 
@@ -201,21 +220,31 @@ bool RunFastQA(const AnalysisConfig &cfg) {
       bool isHoriz = isHorizontal->at(channels[0]);
 
       TH2F *hist = nullptr;
+
+      // Get dynamic ranges for this sensor
+      int minCol = sensorMinCol[sid];
+      int maxCol = sensorMaxCol[sid];
+      int minStrip = sensorMinStrip[sid];
+      int maxStrip = sensorMaxStrip[sid];
+
+      int nColBins = maxCol - minCol + 1;
+      int nStripBins = maxStrip - minStrip + 1;
+
       if (!isHoriz) {
         // Vertical: X=Column (sensor_row), Y=Strip (sensor_col)
-        // Bin edges at -0.5, 0.5, 1.5 so that integer values 0, 1 are at bin centers
+        // Bin edges at minCol-0.5 to maxCol+0.5 so integer values are at bin centers
         hist = new TH2F(Form("sensor%02d_amplitude_map", sid),
                         Form("Event %d - Sensor %02d Amplitude Map;Column;Strip;Amplitude (ADC)",
                              event, sid),
-                        2, -0.5, 1.5,  // X axis: column (bin centers at 0, 1)
-                        5, -0.5, 4.5);  // Y axis: strip (bin centers at 0, 1, 2, 3, 4)
+                        nColBins, minCol - 0.5, maxCol + 0.5,
+                        nStripBins, minStrip - 0.5, maxStrip + 0.5);
       } else {
         // Horizontal: X=Strip (sensor_col), Y=Column (sensor_row)
         hist = new TH2F(Form("sensor%02d_amplitude_map", sid),
                         Form("Event %d - Sensor %02d Amplitude Map;Strip;Column;Amplitude (ADC)",
                              event, sid),
-                        5, -0.5, 4.5,  // X axis: strip (bin centers at 0, 1, 2, 3, 4)
-                        2, -0.5, 1.5);  // Y axis: column (bin centers at 0, 1)
+                        nStripBins, minStrip - 0.5, maxStrip + 0.5,
+                        nColBins, minCol - 0.5, maxCol + 0.5);
       }
 
       // Fill histogram with amplitude values
