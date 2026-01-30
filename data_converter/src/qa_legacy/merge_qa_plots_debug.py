@@ -34,8 +34,9 @@ def merge_and_compare(file0_path, file1_path, output_dir, num_events=5):
     ROOT.gStyle.SetPalette(ROOT.kRainBow)
 
     for key_name in keys0[:num_events]:
+        print(f"\n{'='*60}")
         print(f"Processing {key_name}...")
-        
+
         c0 = dir0.Get(key_name)
         c1 = dir1.Get(key_name)
 
@@ -47,29 +48,43 @@ def merge_and_compare(file0_path, file1_path, output_dir, num_events=5):
         hists = {} # Map sensor_id -> combined histogram
 
         # Helper to extract and add
-        def extract_from_canvas(canvas):
+        def extract_from_canvas(canvas, source_name):
+            print(f"  Extracting from {source_name}:")
             primitives = canvas.GetListOfPrimitives()
+            print(f"    Number of primitives in canvas: {primitives.GetEntries()}")
+
+            found_count = 0
             for obj in primitives:
                 # The canvas is divided into pads. We need to go into pads.
                 if obj.InheritsFrom("TPad"):
                     pad_prims = obj.GetListOfPrimitives()
+                    print(f"    Found TPad '{obj.GetName()}' with {pad_prims.GetEntries()} primitives")
                     for prim in pad_prims:
                         if prim.InheritsFrom("TH2"):
                             name = prim.GetName()
+                            print(f"      Found TH2: '{name}'")
                             # name is "sensorXX_amplitude_map"
                             if "sensor" in name:
                                 sensor_id = int(name.split("sensor")[1].split("_")[0])
                                 if sensor_id not in hists:
+                                    print(f"        -> Adding sensor {sensor_id} (new)")
                                     hists[sensor_id] = prim.Clone(f"merged_sensor{sensor_id}_{key_name}")
                                     hists[sensor_id].SetDirectory(0)
+                                    found_count += 1
                                 else:
+                                    print(f"        -> Merging into existing sensor {sensor_id}")
                                     hists[sensor_id].Add(prim)
+                                    found_count += 1
+            print(f"    Total histograms processed from {source_name}: {found_count}")
 
-        extract_from_canvas(c0)
-        extract_from_canvas(c1)
+        extract_from_canvas(c0, "daq00")
+        extract_from_canvas(c1, "daq01")
 
         # Now draw merged histograms
         num_sensors = len(hists)
+        print(f"  Total unique sensors in merged data: {num_sensors}")
+        print(f"  Sensor IDs: {sorted(hists.keys())}")
+
         if num_sensors == 0:
             continue
 
@@ -95,7 +110,7 @@ def merge_and_compare(file0_path, file1_path, output_dir, num_events=5):
 
 if __name__ == "__main__":
     if len(sys.argv) < 4:
-        print("Usage: python3 merge_qa_plots.py <daq00_qc.root> <daq01_qc.root> <output_dir>")
+        print("Usage: python3 merge_qa_plots_debug.py <daq00_qc.root> <daq01_qc.root> <output_dir>")
         sys.exit(1)
-    
+
     merge_and_compare(sys.argv[1], sys.argv[2], sys.argv[3])

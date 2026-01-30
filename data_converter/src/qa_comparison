@@ -24,6 +24,7 @@ import tempfile
 # Check for required dependencies with helpful error messages
 try:
     import ROOT
+    ROOT.gROOT.SetBatch(True)  # Enable batch mode - no GUI
 except ImportError:
     print("ERROR: ROOT Python module not found.", file=sys.stderr)
     print("Please source ROOT environment before running this script:", file=sys.stderr)
