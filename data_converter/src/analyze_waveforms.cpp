@@ -416,7 +416,7 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
   const size_t nCFD = cfg.cfd_thresholds.size();
   const size_t nLE = cfg.le_thresholds.size();
   const size_t nCharge = cfg.charge_thresholds.size();
-
+  
   std::vector<std::vector<float>> timeCFD(cfg.n_channels(), std::vector<float>(nCFD));
   std::vector<std::vector<float>> jitterCFD(cfg.n_channels(), std::vector<float>(nCFD));
   std::vector<std::vector<float>> timeLE(cfg.n_channels(), std::vector<float>(nLE));
@@ -596,9 +596,10 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
         jitterCFD[ch][i] = features.jitterCFD[i];
       }
       for (size_t i = 0; i < nLE && i < features.timeLE.size(); ++i) {
-        timeLE[ch][i] = features.timeLE[i];
-        jitterLE[ch][i] = features.jitterLE[i];
+        timeLE[ch][i] = features.timeLE[i];	
+	jitterLE[ch][i] = features.jitterLE[i];
         totLE[ch][i] = features.totLE[i];
+	cout<<ch<<"   "<<cfg.le_thresholds[i]<<"   "<<timeLE[ch][i]<<endl;
       }
       for (size_t i = 0; i < nCharge && i < features.timeCharge.size(); ++i) {
         timeCharge[ch][i] = features.timeCharge[i];
