@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 
 import h5py
@@ -9,10 +10,8 @@ def plot_charge(filename):
 
     with h5py.File(filename, "r") as f:
         hits = f["Hits"]
-
         charge = hits["charge"]
 
-        # ノイズ除去（必要なら調整）
         charge = charge[charge > 0]
 
         print("Entries:", len(charge))
@@ -25,20 +24,24 @@ def plot_charge(filename):
         plt.hist(charge, bins=200, range=(0, np.percentile(charge, 99.5)))
         plt.xlabel("Charge")
         plt.ylabel("Entries")
-        plt.title("Charge distribution (99.5% range)")
+        plt.title("Charge distribution")
         plt.yscale("log")
         plt.grid()
 
+        plt.savefig("charge_hist.png", dpi=150)
+        print("Saved: charge_hist.png")
+
         # zoom版
         plt.figure()
-        plt.hist(charge, bins=200, range=(0, 200))  # 調整可
+        plt.hist(charge, bins=200, range=(0, 200))
         plt.xlabel("Charge")
         plt.ylabel("Entries")
         plt.title("Charge (zoom)")
         plt.yscale("log")
         plt.grid()
 
-        plt.show()
+        plt.savefig("charge_hist_zoom.png", dpi=150)
+        print("Saved: charge_hist_zoom.png")
 
 
 if __name__ == "__main__":
