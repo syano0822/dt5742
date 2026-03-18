@@ -100,7 +100,7 @@ struct CalibPol1 {
 static const CalibPol1 g_calib_pol1[2][16] = {
   // DAQ 0
   {
-    {},                                    // ch0: no calibration
+    {0, 1, true},                          // ch0: no calibration
     {-3.176676f, 0.286681f, true},         // ch1
     {-3.555424f, 0.288232f, true},         // ch2
     {-3.115196f, 0.287901f, true},         // ch3
@@ -134,7 +134,7 @@ static const CalibPol1 g_calib_pol1[2][16] = {
     {-1.900867f, 0.306163f, true},         // ch12
     {-1.852977f, 0.308358f, true},         // ch13
     {-1.938787f, 0.309390f, true},         // ch14
-    {},                                    // ch15: no calibration
+    {0, 1, true},                          // ch15: no calibration
   },
 };
 
