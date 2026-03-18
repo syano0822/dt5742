@@ -421,9 +421,6 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
   std::vector<std::vector<float>> jitterLE(cfg.n_channels(), std::vector<float>(nLE));
   std::vector<std::vector<float>> totLE(cfg.n_channels(), std::vector<float>(nLE));
   std::vector<std::vector<float>> timeCharge(cfg.n_channels(), std::vector<float>(nCharge));
-  std::vector<std::vector<float>> timeCFDFit(cfg.n_channels(), std::vector<float>(nCFD));
-  std::vector<std::vector<float>> jitterCFDFit(cfg.n_channels(), std::vector<float>(nCFD));
-  
   auto defineTimingBranches = [&]() {
     for (int ch = 0; ch < cfg.n_channels(); ++ch) {
       for (size_t i = 0; i < nCFD; ++i) {
@@ -431,10 +428,6 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
                           &timeCFD[ch][i]);
         outputTree->Branch(Form("ch%02d_jitterCFD_%dpc", ch, cfg.cfd_thresholds[i]),
                           &jitterCFD[ch][i]);
-        outputTree->Branch(Form("ch%02d_timeCFDFit_%dpc", ch, cfg.cfd_thresholds[i]),
-                          &timeCFDFit[ch][i]);
-        outputTree->Branch(Form("ch%02d_jitterCFDFit_%dpc", ch, cfg.cfd_thresholds[i]),
-                          &jitterCFDFit[ch][i]);
       }
       for (size_t i = 0; i < nLE; ++i) {
         outputTree->Branch(Form("ch%02d_timeLE_%.1fmV", ch, cfg.le_thresholds[i]),
@@ -592,9 +585,7 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
       
       for (size_t i = 0; i < nCFD && i < features.timeCFD.size(); ++i) {
         timeCFD[ch][i] = features.timeCFD[i];
-        jitterCFD[ch][i] = features.jitterCFD[i];	
-	timeCFDFit[ch][i] = features.timeCFDFit[i];
-        jitterCFDFit[ch][i] = features.jitterCFDFit[i];
+        jitterCFD[ch][i] = features.jitterCFD[i];
       }
       for (size_t i = 0; i < nLE && i < features.timeLE.size(); ++i) {
         timeLE[ch][i] = features.timeLE[i];
