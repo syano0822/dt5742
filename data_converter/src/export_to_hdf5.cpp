@@ -606,7 +606,7 @@ bool ExportAnalysisFeatures(const std::string &rootFile,
   H5Tinsert(type, "noise1Point", HOFFSET(AnalysisFeatureMeta, noise1Point), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "ampMinBefore", HOFFSET(AnalysisFeatureMeta, ampMinBefore), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "ampMaxBefore", HOFFSET(AnalysisFeatureMeta, ampMaxBefore), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "ampMax", HOFFSET(AnalysisFeatureMeta, ampMax), H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "ampMax_mV", HOFFSET(AnalysisFeatureMeta, ampMax), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "charge", HOFFSET(AnalysisFeatureMeta, charge), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "signalOverNoise", HOFFSET(AnalysisFeatureMeta, signalOverNoise), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "peakTime", HOFFSET(AnalysisFeatureMeta, peakTime), H5T_NATIVE_FLOAT);
@@ -840,7 +840,7 @@ bool ExportAnalysisFeaturesMultiDAQ(const std::vector<DaqConfig> &daqConfigs,
       std::vector<float> *peakTime = nullptr;
 
       tree->SetBranchAddress("event", &event);
-      tree->SetBranchAddress("ampMax", &ampMax);
+      tree->SetBranchAddress("ampMax_mV", &ampMax);
       tree->SetBranchAddress("peakTime", &peakTime);
 
       const Long64_t nEntries = tree->GetEntries();
