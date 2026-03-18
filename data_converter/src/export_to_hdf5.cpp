@@ -500,7 +500,7 @@ bool ExportAnalysisFeatures(const std::string &rootFile,
   tree->SetBranchAddress("ampMinBefore", &ampMinBefore);
   tree->SetBranchAddress("ampMaxBefore", &ampMaxBefore);
   tree->SetBranchAddress("ampMax", &ampMax);
-  tree->SetBranchAddress("charge", &charge);
+  tree->SetBranchAddress("charge_mV", &charge);
   tree->SetBranchAddress("signalOverNoise", &signalOverNoise);
   tree->SetBranchAddress("peakTime", &peakTime);
   tree->SetBranchAddress("riseTime", &riseTime);
