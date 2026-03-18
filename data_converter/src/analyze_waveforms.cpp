@@ -358,6 +358,7 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
   std::vector<float> ampMax(cfg.n_channels());
   std::vector<float> ampMax_mV(cfg.n_channels(), 0.f);
   std::vector<float> charge(cfg.n_channels());
+  std::vector<float> charge_mV(cfg.n_channels(), 0.f);
   std::vector<float> signalOverNoise(cfg.n_channels());
   std::vector<float> peakTime(cfg.n_channels());
   std::vector<float> riseTime(cfg.n_channels());
@@ -403,6 +404,7 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
     outputTree->Branch("ampMax", &ampMax);
     outputTree->Branch("ampMax_mV", &ampMax_mV);
     outputTree->Branch("charge", &charge);
+    outputTree->Branch("charge_mV", &charge_mV);
     outputTree->Branch("signalOverNoise", &signalOverNoise);
     outputTree->Branch("peakTime", &peakTime);
     outputTree->Branch("riseTime", &riseTime);
@@ -577,6 +579,12 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
         ampMax_mV[ch] = 0.f;
       }
       charge[ch] = features.charge;
+      if (daqIndex >= 0 && daqIndex < 2 && ch < 16 &&
+          g_calib_pol1[daqIndex][ch].valid) {
+        charge_mV[ch] = g_calib_pol1[daqIndex][ch].slope * features.charge;
+      } else {
+        charge_mV[ch] = 0.f;
+      }
       signalOverNoise[ch] = features.signalOverNoise;
       peakTime[ch] = features.peakTime;
       riseTime[ch] = features.riseTime;
