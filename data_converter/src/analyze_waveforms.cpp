@@ -84,6 +84,60 @@ bool IsSensorHorizontal(int sensorID, const AnalysisConfig& cfg) {
   return cfg.sensor_orientations[localIndex] == "horizontal";
 }
 
+// Lightweight linear calibration: mv = offset + slope * adc
+// Matches the interface of TF1::Eval() used in QuickCheckHitMapDUT.C.
+struct CalibPol1 {
+  float offset = 0.f;
+  float slope  = 0.f;
+  bool  valid  = false;
+  float Eval(float adc) const { return offset + slope * adc; }
+};
+
+// ADC-to-mV linear calibration table, indexed by [daq][ch] (both 0-based).
+// Channels without a calibration entry have valid=false.
+// DAQ 0: ch1-ch15 calibrated; ch0 has no calibration.
+// DAQ 1: ch0-ch14 calibrated; ch15 has no calibration.
+static const CalibPol1 g_calib_pol1[2][16] = {
+  // DAQ 0
+  {
+    {0, 1, true},                          // ch0: no calibration
+    {-3.176676f, 0.286681f, true},         // ch1
+    {-3.555424f, 0.288232f, true},         // ch2
+    {-3.115196f, 0.287901f, true},         // ch3
+    {-2.451742f, 0.281876f, true},         // ch4
+    {-2.674749f, 0.284403f, true},         // ch5
+    {-2.813437f, 0.285116f, true},         // ch6
+    {-2.851733f, 0.286678f, true},         // ch7
+    {-2.480619f, 0.279976f, true},         // ch8
+    {-2.652653f, 0.285591f, true},         // ch9
+    {-1.574811f, 0.277765f, true},         // ch10
+    {-1.371317f, 0.277248f, true},         // ch11
+    {-1.307235f, 0.276787f, true},         // ch12
+    {-1.884459f, 0.281404f, true},         // ch13
+    {-1.992954f, 0.281581f, true},         // ch14
+    {-1.935413f, 0.281919f, true},         // ch15
+  },
+  // DAQ 1
+  {
+    {-1.315517f, 0.304584f, true},         // ch0
+    {-1.498006f, 0.312468f, true},         // ch1
+    {-1.754055f, 0.305675f, true},         // ch2
+    {-1.586169f, 0.306521f, true},         // ch3
+    {-1.790790f, 0.306217f, true},         // ch4
+    {-1.626740f, 0.307081f, true},         // ch5
+    {-1.884997f, 0.309002f, true},         // ch6
+    {-1.910199f, 0.309617f, true},         // ch7
+    {-1.815818f, 0.306846f, true},         // ch8
+    {-1.786031f, 0.306699f, true},         // ch9
+    {-1.809334f, 0.307955f, true},         // ch10
+    {-1.761285f, 0.308772f, true},         // ch11
+    {-1.900867f, 0.306163f, true},         // ch12
+    {-1.852977f, 0.308358f, true},         // ch13
+    {-1.938787f, 0.309390f, true},         // ch14
+    {0, 1, true},                          // ch15: no calibration
+  },
+};
+
 bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t eventEnd = -1) {
   // Maximum file size for waveform plots: 4 GB
   const Long64_t MAX_PLOTS_FILE_SIZE = 4LL * 1024 * 1024 * 1024;  // 4 GB in bytes
@@ -302,7 +356,9 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
   std::vector<float> ampMinBefore(cfg.n_channels());
   std::vector<float> ampMaxBefore(cfg.n_channels());
   std::vector<float> ampMax(cfg.n_channels());
+  std::vector<float> ampMax_mV(cfg.n_channels(), 0.f);
   std::vector<float> charge(cfg.n_channels());
+  std::vector<float> charge_mV(cfg.n_channels(), 0.f);
   std::vector<float> signalOverNoise(cfg.n_channels());
   std::vector<float> peakTime(cfg.n_channels());
   std::vector<float> riseTime(cfg.n_channels());
@@ -346,7 +402,9 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
     outputTree->Branch("ampMinBefore", &ampMinBefore);
     outputTree->Branch("ampMaxBefore", &ampMaxBefore);
     outputTree->Branch("ampMax", &ampMax);
+    outputTree->Branch("ampMax_mV", &ampMax_mV);
     outputTree->Branch("charge", &charge);
+    outputTree->Branch("charge_mV", &charge_mV);
     outputTree->Branch("signalOverNoise", &signalOverNoise);
     outputTree->Branch("peakTime", &peakTime);
     outputTree->Branch("riseTime", &riseTime);
@@ -358,14 +416,13 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
   const size_t nCFD = cfg.cfd_thresholds.size();
   const size_t nLE = cfg.le_thresholds.size();
   const size_t nCharge = cfg.charge_thresholds.size();
-
+  
   std::vector<std::vector<float>> timeCFD(cfg.n_channels(), std::vector<float>(nCFD));
   std::vector<std::vector<float>> jitterCFD(cfg.n_channels(), std::vector<float>(nCFD));
   std::vector<std::vector<float>> timeLE(cfg.n_channels(), std::vector<float>(nLE));
   std::vector<std::vector<float>> jitterLE(cfg.n_channels(), std::vector<float>(nLE));
   std::vector<std::vector<float>> totLE(cfg.n_channels(), std::vector<float>(nLE));
   std::vector<std::vector<float>> timeCharge(cfg.n_channels(), std::vector<float>(nCharge));
-
   auto defineTimingBranches = [&]() {
     for (int ch = 0; ch < cfg.n_channels(); ++ch) {
       for (size_t i = 0; i < nCFD; ++i) {
@@ -391,6 +448,16 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
 
   defineScalarBranches();
   defineTimingBranches();
+
+  // Determine DAQ index from daq_name (e.g. "daq00" -> 0, "daq01" -> 1)
+  int daqIndex = -1;
+  {
+    const std::string &name = cfg.daq_name();
+    size_t pos = name.find_first_of("0123456789");
+    if (pos != std::string::npos) {
+      try { daqIndex = std::stoi(name.substr(pos)); } catch (...) {}
+    }
+  }
 
   // Process all events in the specified range
   std::cout << "Analyzing " << nEntries << " events..." << std::endl;
@@ -505,7 +572,19 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
       ampMinBefore[ch] = features.ampMinBefore;
       ampMaxBefore[ch] = features.ampMaxBefore;
       ampMax[ch] = features.ampMax;
+      if (daqIndex >= 0 && daqIndex < 2 && ch < 16 &&
+          g_calib_pol1[daqIndex][ch].valid && features.ampMax > 0.f) {
+        ampMax_mV[ch] = g_calib_pol1[daqIndex][ch].Eval(features.ampMax);
+      } else {
+        ampMax_mV[ch] = 0.f;
+      }
       charge[ch] = features.charge;
+      if (daqIndex >= 0 && daqIndex < 2 && ch < 16 &&
+          g_calib_pol1[daqIndex][ch].valid) {
+        charge_mV[ch] = g_calib_pol1[daqIndex][ch].slope * features.charge;
+      } else {
+        charge_mV[ch] = 0.f;
+      }
       signalOverNoise[ch] = features.signalOverNoise;
       peakTime[ch] = features.peakTime;
       riseTime[ch] = features.riseTime;
@@ -517,9 +596,10 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
         jitterCFD[ch][i] = features.jitterCFD[i];
       }
       for (size_t i = 0; i < nLE && i < features.timeLE.size(); ++i) {
-        timeLE[ch][i] = features.timeLE[i];
-        jitterLE[ch][i] = features.jitterLE[i];
+        timeLE[ch][i] = features.timeLE[i];	
+	jitterLE[ch][i] = features.jitterLE[i];
         totLE[ch][i] = features.totLE[i];
+	cout<<ch<<"   "<<cfg.le_thresholds[i]<<"   "<<timeLE[ch][i]<<endl;
       }
       for (size_t i = 0; i < nCharge && i < features.timeCharge.size(); ++i) {
         timeCharge[ch][i] = features.timeCharge[i];

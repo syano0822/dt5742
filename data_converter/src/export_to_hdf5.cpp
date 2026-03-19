@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <set>
+#include <map>
 #include <fstream>
 #include <regex>
 
@@ -500,7 +501,7 @@ bool ExportAnalysisFeatures(const std::string &rootFile,
   tree->SetBranchAddress("ampMinBefore", &ampMinBefore);
   tree->SetBranchAddress("ampMaxBefore", &ampMaxBefore);
   tree->SetBranchAddress("ampMax", &ampMax);
-  tree->SetBranchAddress("charge", &charge);
+  tree->SetBranchAddress("charge_mV", &charge);
   tree->SetBranchAddress("signalOverNoise", &signalOverNoise);
   tree->SetBranchAddress("peakTime", &peakTime);
   tree->SetBranchAddress("riseTime", &riseTime);
@@ -606,7 +607,7 @@ bool ExportAnalysisFeatures(const std::string &rootFile,
   H5Tinsert(type, "noise1Point", HOFFSET(AnalysisFeatureMeta, noise1Point), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "ampMinBefore", HOFFSET(AnalysisFeatureMeta, ampMinBefore), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "ampMaxBefore", HOFFSET(AnalysisFeatureMeta, ampMaxBefore), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "ampMax", HOFFSET(AnalysisFeatureMeta, ampMax), H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "ampMax_mV", HOFFSET(AnalysisFeatureMeta, ampMax), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "charge", HOFFSET(AnalysisFeatureMeta, charge), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "signalOverNoise", HOFFSET(AnalysisFeatureMeta, signalOverNoise), H5T_NATIVE_FLOAT);
   H5Tinsert(type, "peakTime", HOFFSET(AnalysisFeatureMeta, peakTime), H5T_NATIVE_FLOAT);
@@ -800,6 +801,65 @@ bool ExportAnalysisFeaturesMultiDAQ(const std::vector<DaqConfig> &daqConfigs,
   std::cout << "Found " << uniqueSensorIds.size() << " unique sensors across "
             << daqConfigs.size() << " DAQs" << std::endl;
 
+  // Pre-pass: collect peak time of sensor3 per DAQ per event, used as reference time.
+  // reference_time[daqName][eventNumber] = peakTime of sensor3 channel
+  std::map<std::string, std::map<uint32_t, float>> sensor3RefTimes;
+  for (const auto &daqCfg : daqConfigs) {
+    // Find the channel(s) mapped to sensor3 in this DAQ
+    int sensor3Channel = -1;
+    int sensor3Count = 0;
+    for (int ch = 0; ch < daqCfg.nChannels &&
+                     ch < static_cast<int>(daqCfg.sensorIds.size()); ++ch) {
+      if (daqCfg.sensorIds[ch] == 3) {
+        if (sensor3Count == 0) sensor3Channel = ch;
+        ++sensor3Count;
+      }
+    }
+    if (sensor3Count == 0) {
+      std::cout << "  INFO: " << daqCfg.daqName
+                << " has no sensor3 channel — no reference correction applied for this DAQ"
+                << std::endl;
+      continue;
+    }
+    if (sensor3Count > 1) {
+      std::cerr << "  WARNING: " << daqCfg.daqName << " has " << sensor3Count
+                << " channels mapped to sensor3 (expected 1), using first found (ch"
+                << sensor3Channel << ")" << std::endl;
+    }
+
+    TFile *fref = TFile::Open(daqCfg.rootFilePath.c_str(), "READ");
+    if (!fref || fref->IsZombie()) {
+      std::cerr << "  WARNING: cannot open ROOT file for sensor3 pre-pass: "
+                << daqCfg.rootFilePath << std::endl;
+      continue;
+    }
+    TTree *tref = dynamic_cast<TTree *>(fref->Get(treeName.c_str()));
+    if (!tref) {
+      std::cerr << "  WARNING: tree " << treeName
+                << " not found in pre-pass for " << daqCfg.daqName << std::endl;
+      fref->Close();
+      continue;
+    }
+
+    int refEvent = 0;
+    std::vector<float> *refPeakTime = nullptr;
+    tref->SetBranchAddress("event", &refEvent);
+    tref->SetBranchAddress("peakTime", &refPeakTime);
+
+    auto &refMap = sensor3RefTimes[daqCfg.daqName];
+    const Long64_t nRefEntries = tref->GetEntries();
+    for (Long64_t entry = 0; entry < nRefEntries; ++entry) {
+      tref->GetEntry(entry);
+      if (!refPeakTime) continue;
+      if (sensor3Channel < static_cast<int>(refPeakTime->size())) {
+        refMap[static_cast<uint32_t>(refEvent)] = (*refPeakTime)[sensor3Channel];
+      }
+    }
+    fref->Close();
+    std::cout << "  Pre-pass " << daqCfg.daqName << ": collected " << refMap.size()
+              << " sensor3 reference times" << std::endl;
+  }
+
   // Process each sensor
   for (int sensorId : uniqueSensorIds) {
     std::cout << "\nProcessing sensor " << sensorId << "..." << std::endl;
@@ -840,7 +900,7 @@ bool ExportAnalysisFeaturesMultiDAQ(const std::vector<DaqConfig> &daqConfigs,
       std::vector<float> *peakTime = nullptr;
 
       tree->SetBranchAddress("event", &event);
-      tree->SetBranchAddress("ampMax", &ampMax);
+      tree->SetBranchAddress("ampMax_mV", &ampMax);
       tree->SetBranchAddress("peakTime", &peakTime);
 
       const Long64_t nEntries = tree->GetEntries();
@@ -881,7 +941,26 @@ bool ExportAnalysisFeaturesMultiDAQ(const std::vector<DaqConfig> &daqConfigs,
           hit.raw = 0u;
           // Use ampMax as a proxy for charge (ADC units)
           hit.charge = (ch < static_cast<int>(ampMax->size())) ? static_cast<double>((*ampMax)[ch]) : 0.0;
-          hit.timestamp = (ch < static_cast<int>(peakTime->size())) ? static_cast<double>((*peakTime)[ch]) : 0.0;
+
+          // Compute peak time: for sensor0–2 use (sensor3_ref_time - raw_peak_time).
+          // sensor3 itself is stored as raw peak time (unchanged).
+          // If sensor3 reference is missing for this event/DAQ, fall back to raw.
+          float rawPeakTime = (peakTime && ch < static_cast<int>(peakTime->size()))
+                                  ? (*peakTime)[ch]
+                                  : 0.0f;
+          float finalTimestamp = rawPeakTime;
+          if (daqCfg.sensorIds[ch] != 3) {
+            auto daqIt = sensor3RefTimes.find(daqCfg.daqName);
+            if (daqIt != sensor3RefTimes.end()) {
+              auto evIt = daqIt->second.find(static_cast<uint32_t>(event));
+              if (evIt != daqIt->second.end()) {
+                finalTimestamp = evIt->second - rawPeakTime;
+              }
+              // else: sensor3 ref missing for this event — keep rawPeakTime
+            }
+            // else: no sensor3 in this DAQ — keep rawPeakTime
+          }
+          hit.timestamp = static_cast<double>(finalTimestamp);
           hit.trigger_number = static_cast<uint32_t>(event);
 
           allHits.push_back(hit);
