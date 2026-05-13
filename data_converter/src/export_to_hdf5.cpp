@@ -1,3 +1,4 @@
+
 #include <cstdint>
 #include <algorithm>
 #include <iostream>
@@ -14,6 +15,8 @@
 #include "utils/filesystem_utils.h"
 #include "hdf5.h"
 #include "utils/json_utils.h"
+
+using namespace std;
 
 namespace {
 
@@ -150,15 +153,21 @@ struct AnalysisFeatureMeta {
   uint16_t strip_id;
   float baseline;
   float rmsNoise;
+  float rmsNoise_mV;
   float noise1Point;
   float ampMinBefore;
   float ampMaxBefore;
   float ampMax;
+  float ampMax_Fit_mV;
   float charge;
   float signalOverNoise;
   float peakTime;
   float riseTime;
+  float riseTime_Fit;
   float slewRate;
+  float slewRate_Fit_mV;
+  float timeCFD_50pc;
+  float timeCFD_Fit_50pc;
 };
 #pragma pack(pop)
 
@@ -488,11 +497,19 @@ bool ExportAnalysisFeatures(const std::string &rootFile,
   std::vector<float> *ampMinBefore = nullptr;
   std::vector<float> *ampMaxBefore = nullptr;
   std::vector<float> *ampMax = nullptr;
+  std::vector<float> *ampMax_Fit_mV = nullptr;
   std::vector<float> *charge = nullptr;
   std::vector<float> *signalOverNoise = nullptr;
   std::vector<float> *peakTime = nullptr;
   std::vector<float> *riseTime = nullptr;
+  std::vector<float> *riseTime_Fit = nullptr;
   std::vector<float> *slewRate = nullptr;
+  std::vector<float> *slewRate_Fit_mV = nullptr;
+  std::vector<float> *rmsNoise_mV = nullptr;
+
+  const int kCFD = 50;
+  std::vector<float> chTimeCFD(nChannels, 0.0f);
+  std::vector<float> chTimeCFD_Fit(nChannels, 0.0f);
 
   tree->SetBranchAddress("event", &event);
   tree->SetBranchAddress("baseline", &baseline);
@@ -506,6 +523,17 @@ bool ExportAnalysisFeatures(const std::string &rootFile,
   tree->SetBranchAddress("peakTime", &peakTime);
   tree->SetBranchAddress("riseTime", &riseTime);
   tree->SetBranchAddress("slewRate", &slewRate);
+  if (tree->GetBranch("ampMax_Fit_mV"))   tree->SetBranchAddress("ampMax_Fit_mV",   &ampMax_Fit_mV);
+  if (tree->GetBranch("riseTime_Fit"))    tree->SetBranchAddress("riseTime_Fit",    &riseTime_Fit);
+  if (tree->GetBranch("slewRate_Fit_mV")) tree->SetBranchAddress("slewRate_Fit_mV", &slewRate_Fit_mV);
+  if (tree->GetBranch("rmsNoise_mV"))     tree->SetBranchAddress("rmsNoise_mV",     &rmsNoise_mV);
+  for (int ch = 0; ch < nChannels; ++ch) {
+    char b[64];
+    std::snprintf(b, sizeof(b), "ch%02d_timeCFD_%dpc",      ch, kCFD);
+    if (tree->GetBranch(b)) tree->SetBranchAddress(b, &chTimeCFD[ch]);
+    std::snprintf(b, sizeof(b), "ch%02d_timeCFD_Fit_%dpc",  ch, kCFD);
+    if (tree->GetBranch(b)) tree->SetBranchAddress(b, &chTimeCFD_Fit[ch]);
+  }
 
   const Long64_t nEntries = tree->GetEntries();
   if (nEntries <= 0) {
@@ -555,17 +583,23 @@ bool ExportAnalysisFeatures(const std::string &rootFile,
         meta.strip_id = static_cast<uint16_t>(ch);
       }
 
-      meta.baseline = (ch < static_cast<int>(baseline->size())) ? (*baseline)[ch] : 0.0f;
-      meta.rmsNoise = (ch < static_cast<int>(rmsNoise->size())) ? (*rmsNoise)[ch] : 0.0f;
-      meta.noise1Point = (ch < static_cast<int>(noise1Point->size())) ? (*noise1Point)[ch] : 0.0f;
-      meta.ampMinBefore = (ch < static_cast<int>(ampMinBefore->size())) ? (*ampMinBefore)[ch] : 0.0f;
-      meta.ampMaxBefore = (ch < static_cast<int>(ampMaxBefore->size())) ? (*ampMaxBefore)[ch] : 0.0f;
-      meta.ampMax = (ch < static_cast<int>(ampMax->size())) ? (*ampMax)[ch] : 0.0f;
-      meta.charge = (ch < static_cast<int>(charge->size())) ? (*charge)[ch] : 0.0f;
-      meta.signalOverNoise = (ch < static_cast<int>(signalOverNoise->size())) ? (*signalOverNoise)[ch] : 0.0f;
-      meta.peakTime = (ch < static_cast<int>(peakTime->size())) ? (*peakTime)[ch] : 0.0f;
-      meta.riseTime = (ch < static_cast<int>(riseTime->size())) ? (*riseTime)[ch] : 0.0f;
-      meta.slewRate = (ch < static_cast<int>(slewRate->size())) ? (*slewRate)[ch] : 0.0f;
+      meta.baseline      = (baseline      && ch < (int)baseline->size())      ? (*baseline)[ch]      : 0.0f;
+      meta.rmsNoise      = (rmsNoise      && ch < (int)rmsNoise->size())      ? (*rmsNoise)[ch]      : 0.0f;
+      meta.rmsNoise_mV   = (rmsNoise_mV   && ch < (int)rmsNoise_mV->size())   ? (*rmsNoise_mV)[ch]   : 0.0f;
+      meta.noise1Point   = (noise1Point   && ch < (int)noise1Point->size())   ? (*noise1Point)[ch]   : 0.0f;
+      meta.ampMinBefore  = (ampMinBefore  && ch < (int)ampMinBefore->size())  ? (*ampMinBefore)[ch]  : 0.0f;
+      meta.ampMaxBefore  = (ampMaxBefore  && ch < (int)ampMaxBefore->size())  ? (*ampMaxBefore)[ch]  : 0.0f;
+      meta.ampMax        = (ampMax        && ch < (int)ampMax->size())        ? (*ampMax)[ch]        : 0.0f;
+      meta.ampMax_Fit_mV = (ampMax_Fit_mV && ch < (int)ampMax_Fit_mV->size()) ? (*ampMax_Fit_mV)[ch] : 0.0f;
+      meta.charge        = (charge        && ch < (int)charge->size())        ? (*charge)[ch]        : 0.0f;
+      meta.signalOverNoise = (signalOverNoise && ch < (int)signalOverNoise->size()) ? (*signalOverNoise)[ch] : 0.0f;
+      meta.peakTime      = (peakTime      && ch < (int)peakTime->size())      ? (*peakTime)[ch]      : 0.0f;
+      meta.riseTime      = (riseTime      && ch < (int)riseTime->size())      ? (*riseTime)[ch]      : 0.0f;
+      meta.riseTime_Fit  = (riseTime_Fit  && ch < (int)riseTime_Fit->size())  ? (*riseTime_Fit)[ch]  : 0.0f;
+      meta.slewRate      = (slewRate      && ch < (int)slewRate->size())      ? (*slewRate)[ch]      : 0.0f;
+      meta.slewRate_Fit_mV = (slewRate_Fit_mV && ch < (int)slewRate_Fit_mV->size()) ? (*slewRate_Fit_mV)[ch] : 0.0f;
+      meta.timeCFD_50pc     = (ch < nChannels) ? chTimeCFD[ch]     : 0.0f;
+      meta.timeCFD_Fit_50pc = (ch < nChannels) ? chTimeCFD_Fit[ch] : 0.0f;
 
       features.push_back(meta);
     }
@@ -602,17 +636,23 @@ bool ExportAnalysisFeatures(const std::string &rootFile,
   H5Tinsert(type, "sensor_id", HOFFSET(AnalysisFeatureMeta, sensor_id), H5T_NATIVE_UINT16);
   H5Tinsert(type, "column_id", HOFFSET(AnalysisFeatureMeta, column_id), H5T_NATIVE_UINT16);
   H5Tinsert(type, "strip_id", HOFFSET(AnalysisFeatureMeta, strip_id), H5T_NATIVE_UINT16);
-  H5Tinsert(type, "baseline", HOFFSET(AnalysisFeatureMeta, baseline), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "rmsNoise", HOFFSET(AnalysisFeatureMeta, rmsNoise), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "noise1Point", HOFFSET(AnalysisFeatureMeta, noise1Point), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "ampMinBefore", HOFFSET(AnalysisFeatureMeta, ampMinBefore), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "ampMaxBefore", HOFFSET(AnalysisFeatureMeta, ampMaxBefore), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "ampMax_mV", HOFFSET(AnalysisFeatureMeta, ampMax), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "charge", HOFFSET(AnalysisFeatureMeta, charge), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "signalOverNoise", HOFFSET(AnalysisFeatureMeta, signalOverNoise), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "peakTime", HOFFSET(AnalysisFeatureMeta, peakTime), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "riseTime", HOFFSET(AnalysisFeatureMeta, riseTime), H5T_NATIVE_FLOAT);
-  H5Tinsert(type, "slewRate", HOFFSET(AnalysisFeatureMeta, slewRate), H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "baseline",         HOFFSET(AnalysisFeatureMeta, baseline),         H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "rmsNoise",         HOFFSET(AnalysisFeatureMeta, rmsNoise),         H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "rmsNoise_mV",      HOFFSET(AnalysisFeatureMeta, rmsNoise_mV),      H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "noise1Point",      HOFFSET(AnalysisFeatureMeta, noise1Point),      H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "ampMinBefore",     HOFFSET(AnalysisFeatureMeta, ampMinBefore),     H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "ampMaxBefore",     HOFFSET(AnalysisFeatureMeta, ampMaxBefore),     H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "ampMax_mV",        HOFFSET(AnalysisFeatureMeta, ampMax),           H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "ampMax_Fit_mV",    HOFFSET(AnalysisFeatureMeta, ampMax_Fit_mV),    H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "charge",           HOFFSET(AnalysisFeatureMeta, charge),           H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "signalOverNoise",  HOFFSET(AnalysisFeatureMeta, signalOverNoise),  H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "peakTime",         HOFFSET(AnalysisFeatureMeta, peakTime),         H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "riseTime",         HOFFSET(AnalysisFeatureMeta, riseTime),         H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "riseTime_Fit",     HOFFSET(AnalysisFeatureMeta, riseTime_Fit),     H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "slewRate",         HOFFSET(AnalysisFeatureMeta, slewRate),         H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "slewRate_Fit_mV",  HOFFSET(AnalysisFeatureMeta, slewRate_Fit_mV),  H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "timeCFD_50pc",     HOFFSET(AnalysisFeatureMeta, timeCFD_50pc),     H5T_NATIVE_FLOAT);
+  H5Tinsert(type, "timeCFD_Fit_50pc", HOFFSET(AnalysisFeatureMeta, timeCFD_Fit_50pc), H5T_NATIVE_FLOAT);
 
   hid_t dset = H5Dcreate(file, "AnalysisFeatures", type, space,
                         H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
@@ -659,12 +699,39 @@ bool ExportCorryHits(const std::string &rootFile,
   }
 
   int event = 0;
-  std::vector<float> *charge = nullptr;
-  std::vector<float> *peakTime = nullptr;
+  // ampMax_Fit_mV is used as Corryvreckan charge
+  std::vector<float> *ampMax        = nullptr;  // stored in Hits.raw
+  std::vector<float> *ampMax_Fit_mV = nullptr;  // stored in Hits.charge
 
   tree->SetBranchAddress("event", &event);
-  tree->SetBranchAddress("charge", &charge);
-  tree->SetBranchAddress("peakTime", &peakTime);
+  if (tree->GetBranch("ampMax"))        tree->SetBranchAddress("ampMax",        &ampMax);
+  if (tree->GetBranch("ampMax_Fit_mV")) tree->SetBranchAddress("ampMax_Fit_mV", &ampMax_Fit_mV);
+
+  // timeCFD_Fit_50pc of sensor3 in the same DAQ is used as the reference time
+  const int kCFD = 50;
+  std::vector<float> chTimeCFD_Fit(nChannels, 0.0f);
+  std::vector<bool>  chHasCFD_Fit(nChannels, false);
+  for (int ch = 0; ch < nChannels; ++ch) {
+    char b[64];
+    std::snprintf(b, sizeof(b), "ch%02d_timeCFD_Fit_%dpc", ch, kCFD);
+    if (tree->GetBranch(b)) {
+      tree->SetBranchAddress(b, &chTimeCFD_Fit[ch]);
+      chHasCFD_Fit[ch] = true;
+    }
+  }
+
+  // Locate sensor3 channel within this DAQ (used as timing reference)
+  int sensor3Ch = -1;
+  if (sensorIds) {
+    for (int ch = 0; ch < nChannels && ch < static_cast<int>(sensorIds->size()); ++ch) {
+      if ((*sensorIds)[ch] == 3) { sensor3Ch = ch; break; }
+    }
+  }
+  if (sensor3Ch < 0) {
+    std::cerr << "WARNING: ExportCorryHits: no sensor3 channel found in mapping — "
+              << "DUT0-2 timestamps will be stored as raw timeCFD_Fit_50pc (no reference subtraction)"
+              << std::endl;
+  }
 
   const Long64_t nEntries = tree->GetEntries();
   if (nEntries <= 0) {
@@ -690,11 +757,27 @@ bool ExportCorryHits(const std::string &rootFile,
   for (Long64_t entry = 0; entry < nEntries; ++entry) {
     tree->GetEntry(entry);
 
+    // Determine sensor3 reference time for this event
+    // timeCFD_Fit_50pc of sensor3 in the same DAQ is used as the reference time
+    bool hasRef = (sensor3Ch >= 0 && chHasCFD_Fit[sensor3Ch]);
+    float refTime = hasRef ? chTimeCFD_Fit[sensor3Ch] : 0.0f;
+
     for (int ch = 0; ch < nChannels; ++ch) {
       if (sensorFilter >= 0 && sensorIds && ch < static_cast<int>(sensorIds->size())) {
         if ((*sensorIds)[ch] != sensorFilter) {
           continue;
         }
+      }
+
+      // Determine sensor_id for this channel
+      int thisSensorId = -1;
+      if (sensorIds && ch < static_cast<int>(sensorIds->size()))
+        thisSensorId = (*sensorIds)[ch];
+
+      // For DUT0-2: require valid sensor3 reference; skip hit if reference is unavailable
+      if (thisSensorId >= 0 && thisSensorId != 3 && !hasRef) {
+        // sensor3 reference missing — do not write invalid timestamp
+        continue;
       }
 
       HitRow hit{};
@@ -710,11 +793,23 @@ bool ExportCorryHits(const std::string &rootFile,
       } else {
         hit.row = static_cast<uint16_t>(ch);
       }
-      hit.raw = 0u;
-      hit.charge =
-          (charge && ch < static_cast<int>(charge->size())) ? static_cast<double>((*charge)[ch]) : 0.0;
-      hit.timestamp =
-          (peakTime && ch < static_cast<int>(peakTime->size())) ? static_cast<double>((*peakTime)[ch]) : 0.0;
+
+      // raw = ampMax (cast to uint8_t; clamped to [0, 255])
+      float rawAmp = (ampMax && ch < static_cast<int>(ampMax->size())) ? (*ampMax)[ch] : 0.0f;
+      hit.raw = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, rawAmp)));
+
+      // charge = ampMax_Fit_mV  (ampMax_Fit_mV is used as Corryvreckan charge)
+      hit.charge = (ampMax_Fit_mV && ch < static_cast<int>(ampMax_Fit_mV->size()))
+                   ? static_cast<double>((*ampMax_Fit_mV)[ch]) : 0.0;
+
+      // timestamp:
+      //   DUT0-2: sensor3_timeCFD_Fit_50pc - hit_timeCFD_Fit_50pc
+      //   sensor3: sensor3 timestamp is stored without reference subtraction
+      float rawCFD = chHasCFD_Fit[ch] ? chTimeCFD_Fit[ch] : 0.0f;
+      float finalTimestamp = (thisSensorId != 3 && hasRef)
+                             ? (refTime - rawCFD)
+                             : rawCFD;
+      hit.timestamp = static_cast<double>(finalTimestamp);
       hit.trigger_number = static_cast<uint32_t>(event);
 
       hits.push_back(hit);
@@ -842,22 +937,27 @@ bool ExportAnalysisFeaturesMultiDAQ(const std::vector<DaqConfig> &daqConfigs,
     }
 
     int refEvent = 0;
-    std::vector<float> *refPeakTime = nullptr;
+    float refCFD = 0.0f;
     tref->SetBranchAddress("event", &refEvent);
-    tref->SetBranchAddress("peakTime", &refPeakTime);
+    char cfdBranchNameRef[64];
+    std::snprintf(cfdBranchNameRef, sizeof(cfdBranchNameRef), "ch%02d_timeCFD_Fit_50pc", sensor3Channel);
+    if (!tref->GetBranch(cfdBranchNameRef)) {
+      std::cerr << "  WARNING: branch " << cfdBranchNameRef << " not found in "
+                << daqCfg.daqName << " — no reference correction applied" << std::endl;
+      fref->Close();
+      continue;
+    }
+    tref->SetBranchAddress(cfdBranchNameRef, &refCFD);
 
     auto &refMap = sensor3RefTimes[daqCfg.daqName];
     const Long64_t nRefEntries = tref->GetEntries();
     for (Long64_t entry = 0; entry < nRefEntries; ++entry) {
       tref->GetEntry(entry);
-      if (!refPeakTime) continue;
-      if (sensor3Channel < static_cast<int>(refPeakTime->size())) {
-        refMap[static_cast<uint32_t>(refEvent)] = (*refPeakTime)[sensor3Channel];
-      }
+      refMap[static_cast<uint32_t>(refEvent)] = refCFD;
     }
     fref->Close();
     std::cout << "  Pre-pass " << daqCfg.daqName << ": collected " << refMap.size()
-              << " sensor3 reference times" << std::endl;
+              << " sensor3 timeCFD_Fit_50pc reference times" << std::endl;
   }
 
   // Process each sensor
@@ -896,22 +996,30 @@ bool ExportAnalysisFeaturesMultiDAQ(const std::vector<DaqConfig> &daqConfigs,
       }
 
       int event = 0;
-      std::vector<float> *ampMax = nullptr;
-      std::vector<float> *peakTime = nullptr;
+      std::vector<float> *ampMax        = nullptr;  // stored in Hits.raw
+      std::vector<float> *ampMax_Fit_mV = nullptr;  // stored in Hits.charge
 
       tree->SetBranchAddress("event", &event);
-      tree->SetBranchAddress("ampMax_mV", &ampMax);
-      tree->SetBranchAddress("peakTime", &peakTime);
+      if (tree->GetBranch("ampMax"))        tree->SetBranchAddress("ampMax",        &ampMax);
+      if (tree->GetBranch("ampMax_Fit_mV")) tree->SetBranchAddress("ampMax_Fit_mV", &ampMax_Fit_mV);
+
+      // Read per-channel timeCFD_Fit_50pc branches
+      std::vector<float> chCFD(daqCfg.nChannels, 0.0f);
+      std::vector<bool> chHasCFD(daqCfg.nChannels, false);
+      for (int ch = 0; ch < daqCfg.nChannels; ++ch) {
+        char cfdBranchName[64];
+        std::snprintf(cfdBranchName, sizeof(cfdBranchName), "ch%02d_timeCFD_Fit_50pc", ch);
+        if (tree->GetBranch(cfdBranchName)) {
+          tree->SetBranchAddress(cfdBranchName, &chCFD[ch]);
+          chHasCFD[ch] = true;
+        }
+      }
 
       const Long64_t nEntries = tree->GetEntries();
       size_t channelsAdded = 0;
 
       for (Long64_t entry = 0; entry < nEntries; ++entry) {
         tree->GetEntry(entry);
-
-        if (!ampMax) {
-          continue;
-        }
 
         for (int ch = 0; ch < daqCfg.nChannels; ++ch) {
           // Filter by sensor
@@ -938,27 +1046,27 @@ bool ExportAnalysisFeaturesMultiDAQ(const std::vector<DaqConfig> &daqConfigs,
             hit.row = static_cast<uint16_t>(ch);
           }
 
-          hit.raw = 0u;
-          // Use ampMax as a proxy for charge (ADC units)
-          hit.charge = (ch < static_cast<int>(ampMax->size())) ? static_cast<double>((*ampMax)[ch]) : 0.0;
+          // raw = ampMax (uint8_t clamp)
+          float rawAmp = (ampMax && ch < static_cast<int>(ampMax->size())) ? (*ampMax)[ch] : 0.0f;
+          hit.raw = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, rawAmp)));
+          // charge = ampMax_Fit_mV
+          hit.charge = (ampMax_Fit_mV && ch < static_cast<int>(ampMax_Fit_mV->size()))
+                           ? static_cast<double>((*ampMax_Fit_mV)[ch]) : 0.0;
 
-          // Compute peak time: for sensor0–2 use (sensor3_ref_time - raw_peak_time).
-          // sensor3 itself is stored as raw peak time (unchanged).
-          // If sensor3 reference is missing for this event/DAQ, fall back to raw.
-          float rawPeakTime = (peakTime && ch < static_cast<int>(peakTime->size()))
-                                  ? (*peakTime)[ch]
-                                  : 0.0f;
-          float finalTimestamp = rawPeakTime;
+          // Timestamp: DUT0-2 = sensor3_timeCFD_Fit_50pc - hit_timeCFD_Fit_50pc
+          //            DUT3   = hit_timeCFD_Fit_50pc (no subtraction)
+          float rawCFD = chHasCFD[ch] ? chCFD[ch] : 0.0f;
+          float finalTimestamp = rawCFD;
           if (daqCfg.sensorIds[ch] != 3) {
             auto daqIt = sensor3RefTimes.find(daqCfg.daqName);
             if (daqIt != sensor3RefTimes.end()) {
               auto evIt = daqIt->second.find(static_cast<uint32_t>(event));
               if (evIt != daqIt->second.end()) {
-                finalTimestamp = evIt->second - rawPeakTime;
+                finalTimestamp = evIt->second - rawCFD;
               }
-              // else: sensor3 ref missing for this event — keep rawPeakTime
+              // else: sensor3 ref missing for this event — keep rawCFD
             }
-            // else: no sensor3 in this DAQ — keep rawPeakTime
+            // else: no sensor3 in this DAQ — keep rawCFD
           }
           hit.timestamp = static_cast<double>(finalTimestamp);
           hit.trigger_number = static_cast<uint32_t>(event);

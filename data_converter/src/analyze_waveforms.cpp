@@ -20,6 +20,8 @@
 #include "TMarker.h"
 #include "TLatex.h"
 #include "TH2F.h"
+#include "TF1.h"
+#include "TMath.h"
 
 #include "config/analysis_config.h"
 #include "analysis/waveform_math.h"
@@ -137,6 +139,219 @@ static const CalibPol1 g_calib_pol1[2][16] = {
     {0, 1, true},                          // ch15: no calibration
   },
 };
+
+// ── Fit-based feature extraction ─────────────────────────────────────────────
+//
+// Results use polarity-corrected space (peak is always positive) to stay
+// consistent with the existing ampMax / peakTime output branches.
+//
+// DUT0-2:
+//   1. pol2 fit in [peak_time ± 0.4 ns]  → ampMax_Fit, peakTime_Fit
+//   2. erf fit in [t_5%, peak_time]       → timeCFD_Fit, riseTime_Fit, leadingEdge_Fit
+//
+// DUT3 (sensor_id == 3):
+//   1. Data peak → peakTime_Fit (raw sample), amp_ref = data peak amplitude
+//   2. erf fit in [t_5%, t_5% + 5 ns]    → ampMax_Fit (= erf |A|),
+//                                            timeCFD_Fit, riseTime_Fit, leadingEdge_Fit
+//
+// All timing quantities are in ns.  Amplitude is in polarity-corrected ADC units.
+// Failed / skipped values are set to kBad = -999.
+struct FitFeatures {
+    static constexpr float kBad = -999.f;
+    float ampMax_Fit      = kBad;
+    float peakTime_Fit    = kBad;
+    float riseTime_Fit    = kBad;
+    float leadingEdge_Fit = kBad;   // time at 10% of amplitude (LE discriminator)
+    std::vector<float> timeCFD_Fit; // one entry per cfd_thresholds element
+};
+
+// Analytical least-squares pol2 fit (y = a0 + a1·x + a2·x²).
+// Gaussian elimination with partial pivoting. Returns false if system is singular.
+static bool FitPol2Analytical(const double* x, const double* y, int n,
+                               double& a0, double& a1, double& a2) {
+    double S0=n, Sx=0, Sx2=0, Sx3=0, Sx4=0, Sy=0, Sxy=0, Sx2y=0;
+    for (int i = 0; i < n; ++i) {
+        double xi=x[i], yi=y[i], xi2=xi*xi;
+        Sx   += xi;  Sx2 += xi2;  Sx3 += xi2*xi;  Sx4 += xi2*xi2;
+        Sy   += yi;  Sxy += xi*yi; Sx2y += xi2*yi;
+    }
+    double M[3][4] = {
+        {S0,  Sx,  Sx2, Sy},
+        {Sx,  Sx2, Sx3, Sxy},
+        {Sx2, Sx3, Sx4, Sx2y}
+    };
+    for (int col = 0; col < 3; ++col) {
+        int pivot = col;
+        for (int r = col+1; r < 3; ++r)
+            if (std::abs(M[r][col]) > std::abs(M[pivot][col])) pivot = r;
+        if (pivot != col) std::swap(M[col], M[pivot]);
+        if (std::abs(M[col][col]) < 1e-12) return false;
+        double inv = 1.0 / M[col][col];
+        for (int r = col+1; r < 3; ++r) {
+            double f = M[r][col] * inv;
+            for (int k = col; k <= 3; ++k) M[r][k] -= f * M[col][k];
+        }
+    }
+    a2 = M[2][3] / M[2][2];
+    a1 = (M[1][3] - M[1][2]*a2) / M[1][1];
+    a0 = (M[0][3] - M[0][2]*a2 - M[0][1]*a1) / M[0][0];
+    return true;
+}
+
+FitFeatures ComputeFitFeatures(
+    const std::vector<float>& amp_raw,      // ped-subtracted ADC (from ch%02d_ped)
+    const std::vector<float>& time,
+    float  baseline,                         // already computed by AnalyzeWaveform
+    int    polarity,                         // cfg.signal_polarity[ch]: +1 or -1
+    int    sensor_id,                        // cfg.sensor_ids[ch]
+    const std::vector<int>& cfd_thresholds, // cfg.cfd_thresholds (in percent)
+    double rt_low  = 0.1,                   // cfg.rise_time_low  (fraction, e.g. 0.4)
+    double rt_high = 0.9)                   // cfg.rise_time_high (fraction, e.g. 0.6)
+{
+    FitFeatures res;
+    res.timeCFD_Fit.assign(cfd_thresholds.size(), FitFeatures::kBad);
+
+    int n = static_cast<int>(std::min(amp_raw.size(), time.size()));
+    if (n < 5) return res;
+
+    // Build polarity-corrected waveform (peak is always positive)
+    std::vector<double> gx(n), gy(n);
+    for (int i = 0; i < n; ++i) {
+        gx[i] = time[i];
+        gy[i] = static_cast<double>((amp_raw[i] - baseline) * polarity);
+    }
+
+    // Peak of corrected signal (maximum value)
+    int    peak_idx  = static_cast<int>(
+                           std::max_element(gy.begin(), gy.end()) - gy.begin());
+    double peak_amp  = gy[peak_idx];
+    double peak_time = gx[peak_idx];
+
+    if (peak_amp < 10.0) return res;   // no signal
+
+    // amp_ref: reference amplitude for the erf fit range (may be updated by pol2)
+    double amp_ref = peak_amp;
+
+    // ── DUT0-2: pol2 fit around peak ─────────────────────────────────────────
+    if (sensor_id != 3) {
+        const double kHalfWin = 0.4;
+        double t_lo_p2 = peak_time - kHalfWin;
+        double t_hi_p2 = peak_time + kHalfWin;
+
+        std::vector<double> px, py;
+        px.reserve(16); py.reserve(16);
+        for (int i = 0; i < n; ++i) {
+            if (gx[i] >= t_lo_p2 && gx[i] <= t_hi_p2) {
+                px.push_back(gx[i]);
+                py.push_back(gy[i]);
+            }
+        }
+
+        if (static_cast<int>(px.size()) >= 3) {
+            double a0, a1, a2;
+            if (FitPol2Analytical(px.data(), py.data(), static_cast<int>(px.size()), a0, a1, a2)) {
+                if (a2 < 0.) {  // concave down = local maximum
+                    double t_pk = -a1 / (2. * a2);
+                    double v_pk =  a0 - a1 * a1 / (4. * a2);
+                    if (v_pk > 0.) {
+                        res.peakTime_Fit = static_cast<float>(t_pk);
+                        res.ampMax_Fit   = static_cast<float>(v_pk);
+                        amp_ref          = v_pk;
+                    }
+                }
+            }
+        }
+    } else {
+        // DUT3: peak from data
+        res.peakTime_Fit = static_cast<float>(peak_time);
+    }
+
+    // ── erf fit on the rising edge (polarity-corrected space) ────────────────
+    // V(t) = A · Freq((t − t₀) / σ),  A > 0,  σ > 0
+    //
+    // Find t_5%: last time before peak where corrected signal crosses 5% of amp_ref
+    const double kFracLo    = 0.05;
+    double       thresh_5   = kFracLo * amp_ref;
+    double       t_lo_erf   = gx[0];
+
+    for (int i = peak_idx; i >= 1; --i) {
+        if (gy[i] >= thresh_5 && gy[i - 1] < thresh_5) {
+            double dx = gx[i] - gx[i - 1];
+            double dy = gy[i] - gy[i - 1];
+            t_lo_erf = (std::abs(dy) > 1e-9)
+                       ? gx[i - 1] + dx / dy * (thresh_5 - gy[i - 1])
+                       : gx[i - 1];
+            break;
+        }
+    }
+
+    // Upper bound of erf window
+    double t_hi_erf = (sensor_id != 3) ? peak_time : t_lo_erf + 5.0;
+    if (t_hi_erf > gx[n - 1]) t_hi_erf = gx[n - 1];
+
+    double dt_erf = t_hi_erf - t_lo_erf;
+    if (dt_erf <= 0.) return res;
+
+    // Collect samples within the erf window
+    std::vector<double> ex, ey;
+    ex.reserve(64); ey.reserve(64);
+    for (int i = 0; i < n; ++i) {
+        if (gx[i] >= t_lo_erf && gx[i] <= t_hi_erf) {
+            ex.push_back(gx[i]);
+            ey.push_back(gy[i]);
+        }
+    }
+    if (static_cast<int>(ex.size()) < 4) return res;
+
+    // Initial parameter estimates
+    //   σ ≈ dt / 5.1  (5% ≈ t₀−1.64σ, 100% ≈ t₀+3.5σ → Δ ≈ 5.1σ)
+    //   t₀ ≈ t_lo + 1.64·σ
+    double sigma_init = dt_erf / 5.1;
+    double t0_init    = t_lo_erf + 1.64 * sigma_init;
+
+    static TF1* s_ferf = nullptr;
+    if (!s_ferf)
+        s_ferf = new TF1("_s_ferf_reuse", "[0]*TMath::Freq((x-[1])/[2])", 0., 1.);
+    s_ferf->SetRange(t_lo_erf, t_hi_erf);
+    s_ferf->SetParameter(0, amp_ref);
+    s_ferf->SetParameter(1, t0_init);
+    s_ferf->SetParameter(2, sigma_init);
+    s_ferf->SetParLimits(0, 0.05 * amp_ref, 20. * amp_ref);
+    s_ferf->SetParLimits(1, t_lo_erf - dt_erf, t_hi_erf);
+    s_ferf->SetParLimits(2, 0.02, dt_erf * 3.);
+    TGraph gerf(static_cast<int>(ex.size()), ex.data(), ey.data());
+    gerf.Fit(s_ferf, "RQN");
+
+    double A_fit     = s_ferf->GetParameter(0);
+    double t0_fit    = s_ferf->GetParameter(1);
+    double sigma_fit = std::abs(s_ferf->GetParameter(2));
+
+    if (A_fit <= 0. || sigma_fit <= 0.) return res;
+
+    // DUT3: ampMax_Fit = erf flat level |A|
+    if (sensor_id == 3)
+        res.ampMax_Fit = static_cast<float>(A_fit);
+
+    // RT using configured thresholds (rt_low to rt_high)
+    res.riseTime_Fit = static_cast<float>(
+        TMath::Sqrt2() * sigma_fit *
+        (TMath::ErfInverse(2.*rt_high - 1.) - TMath::ErfInverse(2.*rt_low - 1.)));
+
+    // Leading edge: time at rt_low fraction of amplitude
+    res.leadingEdge_Fit = static_cast<float>(
+        t0_fit + TMath::Sqrt2() * sigma_fit * TMath::ErfInverse(2.*rt_low - 1.));
+
+    // CFD at each configured threshold
+    for (size_t k = 0; k < cfd_thresholds.size(); ++k) {
+        double f   = cfd_thresholds[k] / 100.0;
+        double arg = 2. * f - 1.;
+        if (arg <= -1. || arg >= 1.) continue;
+        res.timeCFD_Fit[k] = static_cast<float>(
+            t0_fit + TMath::Sqrt2() * sigma_fit * TMath::ErfInverse(arg));
+    }
+
+    return res;
+}
 
 bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t eventEnd = -1) {
   // Maximum file size for waveform plots: 4 GB
@@ -267,6 +482,11 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
     return false;
   }
 
+  // Pre-warm I/O: reduces the slow-start caused by cold disk reads
+  inputTree->SetCacheSize(256LL * 1024 * 1024);  // 256 MB read-ahead cache
+  inputTree->AddBranchToCache("*", true);
+  inputTree->StopCacheLearningPhase();
+
   // Get number of entries
   Long64_t totalEntries = inputTree->GetEntries();
   if (totalEntries == 0) {
@@ -352,6 +572,7 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
   std::vector<bool> hasSignal(cfg.n_channels());
   std::vector<float> baseline(cfg.n_channels());
   std::vector<float> rmsNoise(cfg.n_channels());
+  std::vector<float> rmsNoise_mV(cfg.n_channels(), 0.f);
   std::vector<float> noise1Point(cfg.n_channels());
   std::vector<float> ampMinBefore(cfg.n_channels());
   std::vector<float> ampMaxBefore(cfg.n_channels());
@@ -363,8 +584,26 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
   std::vector<float> peakTime(cfg.n_channels());
   std::vector<float> riseTime(cfg.n_channels());
   std::vector<float> slewRate(cfg.n_channels());
+  std::vector<float> slewRate_mV(cfg.n_channels(), 0.f);
   std::vector<float> jitterRMS(cfg.n_channels());
-  
+
+  // Multi-threshold count (needed by Fit variables below)
+  const size_t nCFD    = cfg.cfd_thresholds.size();
+  const size_t nLE     = cfg.le_thresholds.size();
+  const size_t nCharge = cfg.charge_thresholds.size();
+
+  // Fit-based output variables (_Fit suffix)
+  std::vector<float> ampMax_Fit(cfg.n_channels(),      FitFeatures::kBad);
+  std::vector<float> ampMax_Fit_mV(cfg.n_channels(),  0.f);
+  std::vector<float> peakTime_Fit(cfg.n_channels(),    FitFeatures::kBad);
+  std::vector<float> riseTime_Fit(cfg.n_channels(),    FitFeatures::kBad);
+  std::vector<float> slewRate_Fit(cfg.n_channels(),    FitFeatures::kBad);
+  std::vector<float> slewRate_Fit_mV(cfg.n_channels(), 0.f);
+  std::vector<float> jitterRMS_Fit(cfg.n_channels(),   FitFeatures::kBad);
+  std::vector<float> leadingEdge_Fit(cfg.n_channels(), FitFeatures::kBad);
+  std::vector<std::vector<float>> timeCFD_Fit(
+      cfg.n_channels(), std::vector<float>(nCFD, FitFeatures::kBad));
+
   // Initialize sensor and strip IDs from config
   for (int ch = 0; ch < cfg.n_channels(); ++ch) {
     sensorID[ch]  = cfg.sensor_ids[ch];
@@ -397,7 +636,8 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
     outputTree->Branch("isHorizontal", &isHorizontal);
     outputTree->Branch("hasSignal", &hasSignal);
     outputTree->Branch("baseline", &baseline);
-    outputTree->Branch("rmsNoise", &rmsNoise);
+    outputTree->Branch("rmsNoise",    &rmsNoise);
+    outputTree->Branch("rmsNoise_mV", &rmsNoise_mV);
     outputTree->Branch("noise1Point", &noise1Point);
     outputTree->Branch("ampMinBefore", &ampMinBefore);
     outputTree->Branch("ampMaxBefore", &ampMaxBefore);
@@ -408,15 +648,12 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
     outputTree->Branch("signalOverNoise", &signalOverNoise);
     outputTree->Branch("peakTime", &peakTime);
     outputTree->Branch("riseTime", &riseTime);
-    outputTree->Branch("slewRate", &slewRate);
-    outputTree->Branch("jitterRMS", &jitterRMS);
+    outputTree->Branch("slewRate",    &slewRate);
+    outputTree->Branch("slewRate_mV", &slewRate_mV);
+    outputTree->Branch("jitterRMS",   &jitterRMS);
   };
 
   // Multi-threshold timing branches (per channel, per threshold)
-  const size_t nCFD = cfg.cfd_thresholds.size();
-  const size_t nLE = cfg.le_thresholds.size();
-  const size_t nCharge = cfg.charge_thresholds.size();
-  
   std::vector<std::vector<float>> timeCFD(cfg.n_channels(), std::vector<float>(nCFD));
   std::vector<std::vector<float>> jitterCFD(cfg.n_channels(), std::vector<float>(nCFD));
   std::vector<std::vector<float>> timeLE(cfg.n_channels(), std::vector<float>(nLE));
@@ -446,8 +683,27 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
     }
   };
 
+  auto defineFitBranches = [&]() {
+    outputTree->Branch("ampMax_Fit",      &ampMax_Fit);
+    outputTree->Branch("ampMax_Fit_mV",   &ampMax_Fit_mV);
+    outputTree->Branch("peakTime_Fit",    &peakTime_Fit);
+    outputTree->Branch("riseTime_Fit",    &riseTime_Fit);
+    outputTree->Branch("slewRate_Fit",    &slewRate_Fit);
+    outputTree->Branch("slewRate_Fit_mV", &slewRate_Fit_mV);
+    outputTree->Branch("jitterRMS_Fit",   &jitterRMS_Fit);
+    outputTree->Branch("leadingEdge_Fit", &leadingEdge_Fit);
+    for (int ch = 0; ch < cfg.n_channels(); ++ch) {
+      for (size_t i = 0; i < nCFD; ++i) {
+        outputTree->Branch(
+            Form("ch%02d_timeCFD_Fit_%dpc", ch, cfg.cfd_thresholds[i]),
+            &timeCFD_Fit[ch][i]);
+      }
+    }
+  };
+
   defineScalarBranches();
   defineTimingBranches();
+  defineFitBranches();
 
   // Determine DAQ index from daq_name (e.g. "daq00" -> 0, "daq01" -> 1)
   int daqIndex = -1;
@@ -565,9 +821,57 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
 
       WaveformFeatures features = AnalyzeWaveform(*ampPtr, *timePtr, cfg, ch);
 
+      // Fit-based features (DUT0-2: pol2 peak + erf edge; DUT3: erf only)
+      ampMax_Fit[ch]      = FitFeatures::kBad;
+      peakTime_Fit[ch]    = FitFeatures::kBad;
+      riseTime_Fit[ch]    = FitFeatures::kBad;
+      leadingEdge_Fit[ch] = FitFeatures::kBad;
+      std::fill(timeCFD_Fit[ch].begin(), timeCFD_Fit[ch].end(), FitFeatures::kBad);
+
+      if (features.hasSignal) {
+        int sid = (ch < static_cast<int>(cfg.sensor_ids.size()))
+                  ? cfg.sensor_ids[ch] : -1;
+        int pol = (ch < static_cast<int>(cfg.signal_polarity.size()))
+                  ? cfg.signal_polarity[ch] : 1;
+        FitFeatures ff = ComputeFitFeatures(
+            *ampPtr, *timePtr, features.baseline, pol, sid, cfg.cfd_thresholds,
+            cfg.rise_time_low, cfg.rise_time_high);
+        ampMax_Fit[ch]      = ff.ampMax_Fit;
+        if (daqIndex >= 0 && daqIndex < 2 && ch < 16 && g_calib_pol1[daqIndex][ch].valid
+            && ff.ampMax_Fit != FitFeatures::kBad)
+          ampMax_Fit_mV[ch] = g_calib_pol1[daqIndex][ch].slope * ff.ampMax_Fit;
+        else
+          ampMax_Fit_mV[ch] = 0.f;
+        peakTime_Fit[ch]    = ff.peakTime_Fit;
+        riseTime_Fit[ch]    = ff.riseTime_Fit;
+        if (ff.ampMax_Fit != FitFeatures::kBad && ff.riseTime_Fit > 0.f) {
+          slewRate_Fit[ch]  = ff.ampMax_Fit
+                              * static_cast<float>(cfg.rise_time_high - cfg.rise_time_low)
+                              / ff.riseTime_Fit;
+          if (daqIndex >= 0 && daqIndex < 2 && ch < 16 && g_calib_pol1[daqIndex][ch].valid)
+            slewRate_Fit_mV[ch] = g_calib_pol1[daqIndex][ch].slope * slewRate_Fit[ch];
+          else
+            slewRate_Fit_mV[ch] = slewRate_Fit[ch];
+          jitterRMS_Fit[ch] = (slewRate_Fit[ch] > 0.f)
+                              ? features.rmsNoise / slewRate_Fit[ch]
+                              : FitFeatures::kBad;
+        } else {
+          slewRate_Fit[ch]    = FitFeatures::kBad;
+          slewRate_Fit_mV[ch] = 0.f;
+          jitterRMS_Fit[ch]   = FitFeatures::kBad;
+        }
+        leadingEdge_Fit[ch] = ff.leadingEdge_Fit;
+        for (size_t k = 0; k < nCFD && k < ff.timeCFD_Fit.size(); ++k)
+          timeCFD_Fit[ch][k] = ff.timeCFD_Fit[k];
+      }
+
       hasSignal[ch] = features.hasSignal;
       baseline[ch] = features.baseline;
       rmsNoise[ch] = features.rmsNoise;
+      if (daqIndex >= 0 && daqIndex < 2 && ch < 16 && g_calib_pol1[daqIndex][ch].valid)
+        rmsNoise_mV[ch] = g_calib_pol1[daqIndex][ch].slope * features.rmsNoise;
+      else
+        rmsNoise_mV[ch] = features.rmsNoise;  // no calibration: ADC = mV (slope=1)
       noise1Point[ch] = features.noise1Point;
       ampMinBefore[ch] = features.ampMinBefore;
       ampMaxBefore[ch] = features.ampMaxBefore;
@@ -589,6 +893,10 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
       peakTime[ch] = features.peakTime;
       riseTime[ch] = features.riseTime;
       slewRate[ch] = features.slewRate;
+      if (daqIndex >= 0 && daqIndex < 2 && ch < 16 && g_calib_pol1[daqIndex][ch].valid)
+        slewRate_mV[ch] = g_calib_pol1[daqIndex][ch].slope * features.slewRate;
+      else
+        slewRate_mV[ch] = features.slewRate;
       jitterRMS[ch] = features.jitterRMS;
       
       for (size_t i = 0; i < nCFD && i < features.timeCFD.size(); ++i) {
@@ -599,7 +907,6 @@ bool RunAnalysis(const AnalysisConfig &cfg, Long64_t eventStart = -1, Long64_t e
         timeLE[ch][i] = features.timeLE[i];	
 	jitterLE[ch][i] = features.jitterLE[i];
         totLE[ch][i] = features.totLE[i];
-	cout<<ch<<"   "<<cfg.le_thresholds[i]<<"   "<<timeLE[ch][i]<<endl;
       }
       for (size_t i = 0; i < nCharge && i < features.timeCharge.size(); ++i) {
         timeCharge[ch][i] = features.timeCharge[i];
